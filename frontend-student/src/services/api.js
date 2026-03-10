@@ -1,5 +1,8 @@
+const PROD_API_URL = "https://student-wellness-backend-production.up.railway.app/api";
+
 const BASE_URL =
-  process.env.REACT_APP_API_URL || "http://localhost:3001/api";
+  process.env.REACT_APP_API_URL?.trim() ||
+  (window.location.hostname === "localhost" ? "http://localhost:3001/api" : PROD_API_URL);
 
 const parseJsonResponse = async (res) => {
   const text = await res.text();
