@@ -1,0 +1,101 @@
+.tensor-insights-card {
+  background: white;
+  border-radius: 16px;
+  padding: 20px 24px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.1);
+  margin-bottom: 25px;
+  display: grid;
+  gap: 12px;
+  border: 2px solid rgba(102, 126, 234, 0.2);
+}
+
+.tensor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.tensor-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tensor-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: #333;
+}
+
+.tensor-chip {
+  background: rgba(102, 126, 234, 0.12);
+  color: #667eea;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.tensor-refresh-btn {
+  border: 1px solid rgba(102, 126, 234, 0.35);
+  background: white;
+  color: #4b5fc7;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tensor-refresh-btn:hover:not(:disabled) {
+  background: rgba(102, 126, 234, 0.08);
+}
+
+.tensor-refresh-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.tensor-status,
+.tensor-error {
+  margin: 0;
+  color: #555;
+  font-size: 0.95rem;
+}
+
+.tensor-error {
+  color: #c62828;
+}
+
+.tensor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+
+.tensor-metric {
+  background: #f8f9ff;
+  border: 1px solid rgba(102, 126, 234, 0.15);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.tensor-metric span {
+  color: #666;
+  font-size: 0.84rem;
+}
+
+.tensor-metric strong {
+  color: #2f3f9e;
+  font-size: 1.03rem;
+}
+
+@media (max-width: 768px) {
+  .tensor-insights-card {
+    padding: 18px;
+  }
+}

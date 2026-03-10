@@ -1,0 +1,137 @@
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║              🔴 CURRENT ERROR: MongoDB Not Connected                     ║
+║                                                                          ║
+║              ✅ SOLUTION: Use MongoDB Atlas (Cloud)                      ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  🎯 WHAT YOU NEED TO DO (5 Minutes)                                      │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Step 1: Go to MongoDB Atlas
+  ────────────────────────────
+  Open browser: https://www.mongodb.com/cloud/atlas/register
+  Sign up (FREE - no credit card needed)
+
+  Step 2: Create FREE Cluster
+  ────────────────────────────
+  • Choose M0 FREE
+  • Click "Create Deployment"
+  • Wait 2 minutes...
+
+  Step 3: Create Database User
+  ─────────────────────────────
+  • Username: student
+  • Password: Student123
+  • Remember this password!
+
+  Step 4: Allow IP Access
+  ────────────────────────
+  • Click "Allow Access from Anywhere"
+  • Click "Finish and Close"
+
+  Step 5: Get Connection String
+  ──────────────────────────────
+  • Click "Connect" button
+  • Choose "Drivers"
+  • Copy connection string
+  • It looks like:
+    mongodb+srv://student:<password>@cluster0.xxxxx.mongodb.net/
+
+  Step 6: Update .env File
+  ─────────────────────────
+  • Open: C:\Users\ADMIN\Downloads\frontend\backend\.env
+  • Replace the MONGODB_URI line
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  📝 WHAT TO CHANGE IN YOUR .env FILE                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Current File Location:
+  ─────────────────────
+  C:\Users\ADMIN\Downloads\frontend\backend\.env
+
+  CURRENT (Line 2):
+  ─────────────────
+  MONGODB_URI=mongodb://localhost:27017/student-wellness
+
+  CHANGE TO (your Atlas connection string):
+  ──────────────────────────────────────────
+  MONGODB_URI=mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net/student-wellness?retryWrites=true&w=majority
+
+  EXAMPLE with real values:
+  ─────────────────────────
+  If your username is: student
+  If your password is: Student123
+  If your cluster is: cluster0.abc12.mongodb.net
+
+  Then line 2 should be:
+  MONGODB_URI=mongodb+srv://student:Student123@cluster0.abc12.mongodb.net/student-wellness?retryWrites=true&w=majority
+
+  ⚠️ IMPORTANT:
+  ────────────
+  • Replace <password> with your actual password (no brackets!)
+  • Don't forget /student-wellness before the ?
+  • No spaces in the connection string
+  • Save the file after editing!
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  🔄 AFTER UPDATING .env FILE                                             │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  1. Go to the Terminal running BACKEND
+  2. Press: Ctrl + C
+  3. Type: Y
+  4. Restart backend:
+     npm start
+  5. You should see:
+     ✅ MongoDB connected successfully
+     🚀 Server running on http://localhost:3001
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  ✅ TEST YOUR APP                                                        │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  1. Go to: http://localhost:3000
+  2. Click: "Sign up here"
+  3. Create account
+  4. If signup works → DATABASE CONNECTED! 🎉
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  📚 DETAILED GUIDES AVAILABLE                                            │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  Full MongoDB Atlas guide with screenshots:
+  → Open: MONGODB-ATLAS-SETUP.md
+
+  Quick start guide:
+  → Open: QUICKSTART.md
+
+  Full documentation:
+  → Open: README.md
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│  ⚡ TOO LONG? HERE'S THE 30-SECOND VERSION                               │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  1. Go to: https://www.mongodb.com/cloud/atlas/register
+  2. Sign up (FREE)
+  3. Create cluster → Create user → Get connection string
+  4. Edit: backend\.env (line 2)
+  5. Paste your connection string
+  6. Restart backend
+  7. Test at: http://localhost:3000
+
+╔══════════════════════════════════════════════════════════════════════════╗
+║                                                                          ║
+║  🎯 Current Status:                                                      ║
+║                                                                          ║
+║  Frontend: ✅ Running on http://localhost:3000                          ║
+║  Backend:  ✅ Running on http://localhost:3001                          ║
+║  Database: ❌ NOT CONNECTED                                              ║
+║                                                                          ║
+║  → Fix: Update .env with MongoDB Atlas connection string                ║
+║                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════╝
