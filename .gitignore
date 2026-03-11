@@ -11,6 +11,7 @@ yarn-error.log*
 .env
 .env.*
 !.env.example
+!frontend-student/.env.production
 
 # Build artifacts
 frontend-student/build/
