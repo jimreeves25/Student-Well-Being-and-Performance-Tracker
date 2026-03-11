@@ -218,6 +218,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
   const sessionStartRef = useRef(null);
   const activeSecondsRef = useRef(0);
   const inactiveSecondsRef = useRef(0);
+  const isFaceDetectedRef = useRef(false);
 
   const noFaceSeconds = Math.round((noFaceStreak * DETECTION_INTERVAL_MS) / 1000);
 
@@ -366,18 +367,19 @@ function LiveFaceStudySession({ studentContext = {} }) {
 
     setIsRunning(false);
     setIsFaceDetected(false);
+    isFaceDetectedRef.current = false;
 
     if (activeSecondsRef.current > 0 || inactiveSecondsRef.current > 0) {
       heartbeatLiveSessionTracking({
         activeSeconds: activeSecondsRef.current,
         inactiveSeconds: inactiveSecondsRef.current,
-        isActive: isFaceDetected,
+        isActive: isFaceDetectedRef.current,
       }).catch(() => {});
     }
     endLiveSessionTracking().catch(() => {});
     activeSecondsRef.current = 0;
     inactiveSecondsRef.current = 0;
-  }, [isFaceDetected, stopDrowsyAlarm]);
+  }, [stopDrowsyAlarm]);
 
   const stressBand = useMemo(() => {
     if (stressScore >= 75) return "High";
@@ -528,6 +530,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
       }
 
       setIsFaceDetected(foundFace);
+      isFaceDetectedRef.current = foundFace;
 
       if (foundFace) {
         activeSecondsRef.current += DETECTION_INTERVAL_MS / 1000;
@@ -634,6 +637,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
       setIsRunning(true);
       setFaceDetections(0);
       setNoFaceStreak(0);
+      isFaceDetectedRef.current = false;
       setElapsedSeconds(0);
       setEmotion("Unknown");
       setMoodTag("Unknown");
@@ -677,7 +681,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
         heartbeatLiveSessionTracking({
           activeSeconds: Math.round(activeSecondsRef.current),
           inactiveSeconds: Math.round(inactiveSecondsRef.current),
-          isActive: isFaceDetected,
+          isActive: isFaceDetectedRef.current,
         }).catch(() => {});
 
         activeSecondsRef.current = 0;
