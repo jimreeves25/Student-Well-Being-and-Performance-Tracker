@@ -1,9 +1,13 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { loginParent, loginUser } from "../services/api";
 import "../styles/Login.css";
 
-function Login({ onLoginSuccess, onGoToSignup }) {
-  const [accountType, setAccountType] = useState("student");
+function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup }) {
+  const [accountType, setAccountType] = useState(initialAccountType);
+    useEffect(() => {
+      setAccountType(initialAccountType === "parent" ? "parent" : "student");
+    }, [initialAccountType]);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -90,10 +94,10 @@ function Login({ onLoginSuccess, onGoToSignup }) {
             style={{ color: "#667eea", cursor: "pointer", fontWeight: "bold" }}
             onClick={() => {
               if (typeof onGoToSignup === "function") {
-                onGoToSignup();
+                onGoToSignup(accountType);
                 return;
               }
-              window.location.hash = "signup";
+              window.location.hash = `signup-${accountType}`;
             }}
           >
             Sign up here {accountType === "parent" ? "as Parent" : "as Student"}

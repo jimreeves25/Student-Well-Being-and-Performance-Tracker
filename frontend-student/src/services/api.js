@@ -20,8 +20,12 @@ const handleResponse = async (res) => {
 
   if (!res.ok) {
     if (res.status === 401) {
+      // Clear both role tokens to avoid stale auth state loops.
       localStorage.removeItem("token");
       localStorage.removeItem("user");
+      localStorage.removeItem("parentToken");
+      localStorage.removeItem("parentUser");
+      localStorage.removeItem("authRole");
     }
 
     throw new Error(result.message || `Request failed with status ${res.status}`);
@@ -80,6 +84,8 @@ export const loginUser = async (data) => {
   });
   const result = await handleResponse(res);
   if (result.token) {
+    localStorage.removeItem("parentToken");
+    localStorage.removeItem("parentUser");
     localStorage.setItem("token", result.token);
     localStorage.setItem("user", JSON.stringify(result.user));
     localStorage.setItem("authRole", "student");
@@ -104,6 +110,8 @@ export const loginParent = async (data) => {
   });
   const result = await handleResponse(res);
   if (result.token) {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
     localStorage.setItem("parentToken", result.token);
     localStorage.setItem("parentUser", JSON.stringify(result.parent));
     localStorage.setItem("authRole", "parent");

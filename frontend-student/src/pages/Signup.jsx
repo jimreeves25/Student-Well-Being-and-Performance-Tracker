@@ -1,9 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { signupParent, signupUser } from "../services/api";
 import "../styles/Login.css";
 
-export default function Signup({ onSignupSuccess, onGoToLogin }) {
-  const [accountType, setAccountType] = useState("student");
+export default function Signup({ initialAccountType = "student", onSignupSuccess, onGoToLogin }) {
+  const [accountType, setAccountType] = useState(initialAccountType);
+    useEffect(() => {
+      setAccountType(initialAccountType === "parent" ? "parent" : "student");
+    }, [initialAccountType]);
+
   const [form, setForm] = useState({
     name: "",
     studentId: "",
@@ -44,9 +48,9 @@ export default function Signup({ onSignupSuccess, onGoToLogin }) {
         alert(res.message || (accountType === "parent" ? "Parent signup submitted for approval" : "Signup failed"));
         if (accountType === "parent") {
           if (typeof onGoToLogin === "function") {
-            onGoToLogin();
+            onGoToLogin("parent");
           } else {
-            window.location.hash = "login";
+            window.location.hash = "login-parent";
           }
         }
       }
@@ -132,10 +136,10 @@ export default function Signup({ onSignupSuccess, onGoToLogin }) {
             style={{ color: "#667eea", cursor: "pointer", fontWeight: "bold" }}
             onClick={() => {
               if (typeof onGoToLogin === "function") {
-                onGoToLogin();
+                onGoToLogin(accountType);
                 return;
               }
-              window.location.hash = "login";
+              window.location.hash = `login-${accountType}`;
             }}
           >
             Login here

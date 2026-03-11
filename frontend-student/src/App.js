@@ -9,9 +9,11 @@ import "./App.css";
 
 function App() {
   const initialHash = window.location.hash.replace("#", "");
+  const initialType = window.location.hash.includes("parent") ? "parent" : "student";
   const [currentPage, setCurrentPage] = useState(
     initialHash === "signup" ? "signup" : "login"
   );
+  const [authViewAccountType, setAuthViewAccountType] = useState(initialType);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authRole, setAuthRole] = useState("student");
   const [summary, setSummary] = useState(null);
@@ -50,14 +52,16 @@ function App() {
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, [isAuthenticated, authRole]);
 
-  const goToSignup = () => {
+  const goToSignup = (accountType = "student") => {
+    setAuthViewAccountType(accountType);
     setCurrentPage("signup");
-    window.location.hash = "signup";
+    window.location.hash = `signup-${accountType}`;
   };
 
-  const goToLogin = () => {
+  const goToLogin = (accountType = "student") => {
+    setAuthViewAccountType(accountType);
     setCurrentPage("login");
-    window.location.hash = "login";
+    window.location.hash = `login-${accountType}`;
   };
 
   const handleLoginSuccess = (role = "student") => {
@@ -95,10 +99,22 @@ function App() {
   }
 
   if (currentPage === "signup") {
-    return <Signup onSignupSuccess={handleSignupSuccess} onGoToLogin={goToLogin} />;
+    return (
+      <Signup
+        initialAccountType={authViewAccountType}
+        onSignupSuccess={handleSignupSuccess}
+        onGoToLogin={goToLogin}
+      />
+    );
   }
 
-  return <Login onLoginSuccess={handleLoginSuccess} onGoToSignup={goToSignup} />;
+  return (
+    <Login
+      initialAccountType={authViewAccountType}
+      onLoginSuccess={handleLoginSuccess}
+      onGoToSignup={goToSignup}
+    />
+  );
 }
 
 export default App;

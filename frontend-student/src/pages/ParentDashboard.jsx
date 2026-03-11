@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   getParentAlerts,
   getParentDashboard,
@@ -18,33 +18,57 @@ function ParentDashboard({ onLogout }) {
   const [reports, setReports] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [softWarning, setSoftWarning] = useState("");
 
   const unreadAlerts = useMemo(() => alerts.filter((item) => !item.isRead), [alerts]);
 
-  const loadDashboard = async () => {
+  const loadDashboard = useCallback(async () => {
+    const firstLoad = !data;
+    if (firstLoad) setLoading(true);
+
     try {
-      const [dashboardData, alertData, reportData] = await Promise.all([
+      const [dashboardResult, alertResult, reportResult] = await Promise.allSettled([
         getParentDashboard(),
         getParentAlerts(),
         getParentReports(),
       ]);
 
-      setData(dashboardData);
-      setAlerts(alertData || []);
-      setReports(reportData);
-      setError("");
+      if (dashboardResult.status === "fulfilled") {
+        setData(dashboardResult.value || null);
+        setError("");
+      } else {
+        const message = dashboardResult.reason?.message || "Unable to load parent dashboard";
+        setError(message);
+      }
+
+      if (alertResult.status === "fulfilled") {
+        setAlerts(alertResult.value || []);
+      }
+
+      if (reportResult.status === "fulfilled") {
+        setReports(reportResult.value || null);
+      }
+
+      const warnings = [];
+      if (alertResult.status === "rejected") warnings.push("alerts");
+      if (reportResult.status === "rejected") warnings.push("reports");
+      setSoftWarning(
+        warnings.length
+          ? `Some sections are temporarily unavailable: ${warnings.join(", ")}.`
+          : ""
+      );
     } catch (err) {
       setError(err.message || "Unable to load parent dashboard");
     } finally {
-      setLoading(false);
+      if (firstLoad) setLoading(false);
     }
-  };
+  }, [data]);
 
   useEffect(() => {
     loadDashboard();
     const interval = setInterval(loadDashboard, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadDashboard]);
 
   const markRead = async (alertId) => {
     try {
@@ -71,13 +95,16 @@ function ParentDashboard({ onLogout }) {
   }
 
   const weeklyBars = data?.studyActivity?.dailySeries || [];
+  const student = data?.student;
+  const riskIndicators = data?.reports?.riskIndicators || [];
+  const burnoutSignals = data?.reports?.burnoutSignals || [];
 
   return (
     <div className="parent-dashboard">
       <header className="parent-header">
         <div>
           <h1>Parent Monitoring Center</h1>
-          <p>Real-time awareness of study, attendance, and wellness trends</p>
+          <p>Track your child&apos;s learning progress, live class engagement, and alerts in one place.</p>
         </div>
         <div className="parent-header-actions">
           <span className={`live-badge ${statusTone[data?.status?.liveClassStatus] || "inactive"}`}>
@@ -86,6 +113,54 @@ function ParentDashboard({ onLogout }) {
           <button className="parent-btn logout" onClick={onLogout}>Logout</button>
         </div>
       </header>
+
+      {!!softWarning && <div className="parent-soft-warning">{softWarning}</div>}
+
+      <section className="parent-grid profile-row">
+        <div className="panel student-profile">
+          <h2>Student Snapshot</h2>
+          <div className="profile-grid">
+            <div>
+              <span>Name</span>
+              <strong>{student?.name || "Unknown"}</strong>
+            </div>
+            <div>
+              <span>Student ID</span>
+              <strong>{student?.studentId || "N/A"}</strong>
+            </div>
+            <div>
+              <span>Live Status</span>
+              <strong>{data?.status?.engagementStatus || "Offline"}</strong>
+            </div>
+            <div>
+              <span>Unread Alerts</span>
+              <strong>{unreadAlerts.length}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="panel risk-panel">
+          <h2>Attention Needed</h2>
+          <div className="chip-wrap">
+            {riskIndicators.length ? (
+              riskIndicators.map((risk) => (
+                <span key={risk} className="risk-chip">{risk}</span>
+              ))
+            ) : (
+              <span className="risk-chip ok">No major risk indicators</span>
+            )}
+          </div>
+          <div className="chip-wrap burnout">
+            {burnoutSignals.length ? (
+              burnoutSignals.map((signal) => (
+                <span key={signal} className="risk-chip warn">{signal}</span>
+              ))
+            ) : (
+              <span className="risk-chip ok">No burnout signals</span>
+            )}
+          </div>
+        </div>
+      </section>
 
       <section className="parent-grid metrics">
         <div className="metric-card">
@@ -220,8 +295,8 @@ function ParentDashboard({ onLogout }) {
           <div className="report-kpis">
             <p><strong>Study Consistency:</strong> {data?.reports?.studyConsistency || 0}%</p>
             <p><strong>Productivity Trend:</strong> {data?.reports?.productivityTrends || 0}</p>
-            <p><strong>Risk Indicators:</strong> {(data?.reports?.riskIndicators || []).join(", ") || "None"}</p>
-            <p><strong>Burnout Signals:</strong> {(data?.reports?.burnoutSignals || []).join(", ") || "None"}</p>
+            <p><strong>Risk Indicators:</strong> {riskIndicators.join(", ") || "None"}</p>
+            <p><strong>Burnout Signals:</strong> {burnoutSignals.join(", ") || "None"}</p>
           </div>
           {!!reports?.weekly?.length && (
             <div className="weekly-table">
