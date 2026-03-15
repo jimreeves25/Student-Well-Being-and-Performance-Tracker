@@ -21,24 +21,31 @@ export default function Signup({ initialAccountType = "student", onSignupSuccess
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    const normalizedForm = {
+      name: form.name.trim(),
+      studentId: form.studentId.trim(),
+      email: form.email.trim(),
+      password: form.password,
+      verificationCode: form.verificationCode.trim(),
+    };
     const requiresVerification = accountType === "parent";
-    const missingBase = !form.name || !form.studentId || !form.email || !form.password;
-    if (missingBase || (requiresVerification && !form.verificationCode)) {
+    const missingBase = !normalizedForm.name || !normalizedForm.studentId || !normalizedForm.email || !normalizedForm.password;
+    if (missingBase || (requiresVerification && !normalizedForm.verificationCode)) {
       alert("Please fill all fields");
       return;
     }
 
     try {
       const payload = {
-        name: form.name,
-        studentId: form.studentId,
-        email: form.email,
-        password: form.password,
+        name: normalizedForm.name,
+        studentId: normalizedForm.studentId,
+        email: normalizedForm.email,
+        password: normalizedForm.password,
       };
 
       const res =
         accountType === "parent"
-          ? await signupParent({ ...payload, verificationCode: form.verificationCode })
+          ? await signupParent({ ...payload, verificationCode: normalizedForm.verificationCode })
           : await signupUser(payload);
 
       if (res.token) {

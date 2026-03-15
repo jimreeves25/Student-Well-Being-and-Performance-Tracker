@@ -3,17 +3,30 @@ const router = express.Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { Op } = require("sequelize");
+const { Op, fn, col, where } = require("sequelize");
+
+const normalizeEmail = (value = "") => String(value).trim().toLowerCase();
+const normalizeStudentId = (value = "") => String(value).trim();
 
 // Signup
 router.post("/signup", async (req, res) => {
   try {
     const { name, studentId, email, password } = req.body;
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedStudentId = normalizeStudentId(studentId);
+    const normalizedName = String(name || "").trim();
+
+    if (!normalizedName || !normalizedStudentId || !normalizedEmail || !password) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
 
     // Check if user exists
     const existingUser = await User.findOne({
       where: {
-        [Op.or]: [{ email }, { studentId }],
+        [Op.or]: [
+          where(fn("lower", col("email")), normalizedEmail),
+          where(fn("lower", col("studentId")), normalizedStudentId.toLowerCase()),
+        ],
       },
     });
 
@@ -26,9 +39,9 @@ router.post("/signup", async (req, res) => {
 
     // Create user
     const user = await User.create({
-      name,
-      studentId,
-      email,
+      name: normalizedName,
+      studentId: normalizedStudentId,
+      email: normalizedEmail,
       password: hashedPassword,
     });
 
@@ -60,9 +73,21 @@ router.post("/signup", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
+    const identity = String(email || "").trim();
+
+    if (!identity || !password) {
+      return res.status(400).json({ message: "Missing credentials" });
+    }
 
     // Find user
-    const user = await User.findOne({ where: { email } });
+    const user = await User.findOne({
+      where: {
+        [Op.or]: [
+          where(fn("lower", col("email")), identity.toLowerCase()),
+          where(fn("lower", col("studentId")), identity.toLowerCase()),
+        ],
+      },
+    });
     if (!user) {
       return res.status(400).json({ message: "Invalid credentials" });
     }

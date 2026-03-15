@@ -1,7 +1,7 @@
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-const { Op } = require("sequelize");
+const { Op, fn, col, where } = require("sequelize");
 
 const User = require("../models/User");
 const ParentUser = require("../models/ParentUser");
@@ -17,6 +17,9 @@ const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || "your_secret_key";
 const LOW_STUDY_HOURS_THRESHOLD = 1.5;
 const INACTIVE_SECONDS_THRESHOLD = 600;
+
+const normalizeEmail = (value = "") => String(value).trim().toLowerCase();
+const normalizeStudentId = (value = "") => String(value).trim();
 
 const makeToken = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
@@ -106,31 +109,39 @@ const createParentAlerts = async ({ studentId, alertType, severity, message, met
 router.post("/signup", async (req, res) => {
   try {
     const { name, email, password, studentId, verificationCode } = req.body;
+    const normalizedName = String(name || "").trim();
+    const normalizedEmail = normalizeEmail(email);
+    const normalizedStudentId = normalizeStudentId(studentId);
+    const normalizedCode = String(verificationCode || "").trim();
 
-    if (!name || !email || !password || !studentId || !verificationCode) {
+    if (!normalizedName || !normalizedEmail || !password || !normalizedStudentId || !normalizedCode) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const existingParent = await ParentUser.findOne({ where: { email } });
+    const existingParent = await ParentUser.findOne({
+      where: where(fn("lower", col("email")), normalizedEmail),
+    });
     if (existingParent) {
       return res.status(400).json({ message: "Parent account already exists" });
     }
 
-    const student = await User.findOne({ where: { studentId } });
+    const student = await User.findOne({
+      where: where(fn("lower", col("studentId")), normalizedStudentId.toLowerCase()),
+    });
     if (!student) {
       return res.status(404).json({ message: "Student not found" });
     }
 
     const codeExpired = !student.parentLinkCodeExpiresAt || new Date(student.parentLinkCodeExpiresAt) < new Date();
-    const codeInvalid = student.parentLinkCode !== verificationCode;
+    const codeInvalid = student.parentLinkCode !== normalizedCode;
     if (codeExpired || codeInvalid) {
       return res.status(400).json({ message: "Invalid or expired verification code" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const parent = await ParentUser.create({
-      name,
-      email,
+      name: normalizedName,
+      email: normalizedEmail,
       password: hashedPassword,
       approvalStatus: "pending",
       linkedStudentId: null,
@@ -139,7 +150,7 @@ router.post("/signup", async (req, res) => {
     await ParentLinkRequest.create({
       parentId: parent.id,
       studentId: student.id,
-      verificationCode,
+      verificationCode: normalizedCode,
       status: "pending",
     });
 
@@ -161,7 +172,15 @@ router.post("/signup", async (req, res) => {
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const parent = await ParentUser.findOne({ where: { email } });
+    const normalizedEmail = normalizeEmail(email);
+
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({ message: "Missing credentials" });
+    }
+
+    const parent = await ParentUser.findOne({
+      where: where(fn("lower", col("email")), normalizedEmail),
+    });
 
     if (!parent) {
       return res.status(400).json({ message: "Invalid credentials" });

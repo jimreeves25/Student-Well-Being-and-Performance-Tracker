@@ -13,7 +13,10 @@ function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup })
   const [loading, setLoading] = useState(false);
 
   const handleLogin = async () => {
-    if (!email || !password) {
+    const normalizedEmail = email.trim();
+    const normalizedPassword = password;
+
+    if (!normalizedEmail || !normalizedPassword) {
       alert("Please fill all fields");
       return;
     }
@@ -22,8 +25,8 @@ function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup })
     try {
       const res =
         accountType === "parent"
-          ? await loginParent({ email, password })
-          : await loginUser({ email, password });
+          ? await loginParent({ email: normalizedEmail, password: normalizedPassword })
+          : await loginUser({ email: normalizedEmail, password: normalizedPassword });
 
       if (res.token) {
         alert(res.message || "Login successful!");
