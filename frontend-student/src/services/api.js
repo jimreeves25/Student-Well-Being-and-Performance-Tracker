@@ -28,7 +28,17 @@ const handleResponse = async (res) => {
       localStorage.removeItem("authRole");
     }
 
-    throw new Error(result.message || `Request failed with status ${res.status}`);
+    let message = result.message;
+
+    if (!message && res.status === 400) {
+      message = "Invalid credentials or user data. Please check your input.";
+    }
+
+    if (!message && res.status === 401) {
+      message = "Session expired or unauthorized. Please login again.";
+    }
+
+    throw new Error(message || `Request failed with status ${res.status}`);
   }
 
   return result;

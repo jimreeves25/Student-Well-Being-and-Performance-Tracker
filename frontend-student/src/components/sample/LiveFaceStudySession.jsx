@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generateLiveFaceSuggestion } from "../services/aiService";
+import { generateLiveFaceSuggestion } from "../../services/aiService";
 import {
   endLiveSessionTracking,
   heartbeatLiveSessionTracking,
   startLiveSessionTracking,
-} from "../services/api";
-import "../styles/LiveFaceStudySession.css";
+} from "../../services/api";
+import "../../styles/LiveFaceStudySession.css";
 
 const DETECTION_INTERVAL_MS = 500;
 const SUGGESTION_INTERVAL_MS = 60000;

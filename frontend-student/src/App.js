@@ -9,9 +9,9 @@ import "./App.css";
 
 function App() {
   const initialHash = window.location.hash.replace("#", "");
-  const initialType = window.location.hash.includes("parent") ? "parent" : "student";
+  const initialType = initialHash.includes("parent") ? "parent" : "student";
   const [currentPage, setCurrentPage] = useState(
-    initialHash === "signup" ? "signup" : "login"
+    initialHash.startsWith("signup") ? "signup" : "login"
   );
   const [authViewAccountType, setAuthViewAccountType] = useState(initialType);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -31,9 +31,11 @@ function App() {
 
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1);
-      if (hash === "signup") {
+      if (hash.startsWith("signup")) {
+        setAuthViewAccountType(hash.includes("parent") ? "parent" : "student");
         setCurrentPage("signup");
-      } else if (hash === "login") {
+      } else if (hash.startsWith("login")) {
+        setAuthViewAccountType(hash.includes("parent") ? "parent" : "student");
         setCurrentPage("login");
       } else if (hash === "/analytics" || hash === "analytics") {
         if (isAuthenticated && authRole === "student") {

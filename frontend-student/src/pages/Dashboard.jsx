@@ -12,7 +12,7 @@ import {
 import AIChatbot from "../components/AIChatbot";
 import SmartScheduler from "../components/SmartScheduler";
 import DashboardCharts from "../components/DashboardCharts";
-import LiveFaceStudySession from "../components/LiveFaceStudySession";
+import LiveFaceStudySession from "../components/sample/LiveFaceStudySession";
 import "../styles/Dashboard.css";
 
 function Dashboard({ onLogout }) {

@@ -1,0 +1,11 @@
+{
+  "installCommand": "cd frontend-student && npm install",
+  "buildCommand": "cd frontend-student && npm run build",
+  "outputDirectory": "frontend-student/build",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
