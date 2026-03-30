@@ -25,7 +25,112 @@ const VIEWS = [
   { id: "ai-tools", label: "AI Tools" },
 ];
 
+const themes = {
+  dark: {
+    name: "Dark",
+    bg: "#0a0a0f",
+    card: "#16161e",
+    cardSecondary: "#1e1e2a",
+    text: "#ffffff",
+    textMuted: "#8888aa",
+    accent: "#1db954",
+    accentText: "#ffffff",
+    border: "#2a2a3a",
+    buttonBg: "#1e1e2a",
+    buttonText: "#ffffff",
+  },
+  light: {
+    name: "Light",
+    bg: "#f7f8fc",
+    card: "#ffffff",
+    cardSecondary: "#f0f1f7",
+    text: "#1a1a2e",
+    textMuted: "#6666888",
+    accent: "#1db954",
+    accentText: "#ffffff",
+    border: "#e0e0ee",
+    buttonBg: "#ffffff",
+    buttonText: "#1a1a2e",
+  },
+  galaxy: {
+    name: "Galaxy",
+    bg: "#0d0d1a",
+    card: "#13131f",
+    cardSecondary: "#1a1a2e",
+    text: "#ffffff",
+    textMuted: "#8888bb",
+    accent: "#9b59f5",
+    accentText: "#ffffff",
+    border: "#2a2a4a",
+    buttonBg: "#1a1a2e",
+    buttonText: "#ffffff",
+  },
+  sunset: {
+    name: "Sunset",
+    bg: "#0f0a08",
+    card: "#1a1210",
+    cardSecondary: "#221815",
+    text: "#ffffff",
+    textMuted: "#aa9988",
+    accent: "#e8622a",
+    accentText: "#ffffff",
+    border: "#332820",
+    buttonBg: "#1a1210",
+    buttonText: "#ffffff",
+  },
+  forest: {
+    name: "Forest",
+    bg: "#080f09",
+    card: "#101810",
+    cardSecondary: "#162016",
+    text: "#ffffff",
+    textMuted: "#779977",
+    accent: "#2d8c45",
+    accentText: "#ffffff",
+    border: "#1e2e1e",
+    buttonBg: "#101810",
+    buttonText: "#ffffff",
+  },
+};
+
+const themeDotColors = {
+  dark: "#555566",
+  light: "#e8e8f0",
+  galaxy: "#9b59f5",
+  sunset: "#e8622a",
+  forest: "#2d8c45",
+};
+
+const StreakDashboard = ({ streakCount, weekDays }) => (
+  <section className="streak-dashboard-card" aria-label="Streak dashboard">
+    <h3>Streak Dashboard</h3>
+    <div className="streak-count">🔥 {streakCount} day streak</div>
+
+    <div className="streak-week-row">
+      {weekDays.map((day) => (
+        <div className="streak-day-item" key={day.key || day.label}>
+          <div
+            className={`streak-day-dot ${day.isActive ? "active" : ""} ${day.isToday ? "today" : ""}`}
+            aria-label={`${day.label}: ${day.isActive ? "active" : "inactive"}`}
+          />
+          <span>{day.label}</span>
+        </div>
+      ))}
+    </div>
+
+    <p className="streak-message">
+      {streakCount > 0 ? "Keep it up! Log in tomorrow to continue" : "Start your streak today!"}
+    </p>
+  </section>
+);
+
 function Dashboard({ onLogout }) {
+  const moodOptions = ["😞", "😐", "🙂", "😄", "🤩"];
+  const [themeName, setThemeName] = useState(() => {
+    const savedTheme = localStorage.getItem("dashboardTheme") || "dark";
+    return savedTheme === "green" ? "forest" : savedTheme;
+  });
+  const theme = themes[themeName] || themes.dark;
   const [summary, setSummary] = useState(null);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +141,9 @@ function Dashboard({ onLogout }) {
   const [parentCode, setParentCode] = useState(null);
   const [parentRequests, setParentRequests] = useState([]);
   const [allowWellnessShare, setAllowWellnessShare] = useState(true);
+  const [selectedMood, setSelectedMood] = useState(null);
+  const [moodLockedForToday, setMoodLockedForToday] = useState(false);
+  const [completedTaskMap, setCompletedTaskMap] = useState({});
 
   const [logForm, setLogForm] = useState({
     studyHours: 0,
@@ -122,6 +230,10 @@ function Dashboard({ onLogout }) {
   const assignmentCompletionRate = Math.round(
     (completedAssignments / Math.max(1, assignments.length || 0)) * 100
   );
+  const averagePerformance = Math.round(
+    assignments.reduce((total, item) => total + Number(item.progress || 0), 0) /
+      Math.max(1, assignments.length)
+  );
 
   const avgFocusMinutes = Number(safeSummary.weeklyStats?.avgFocusMinutes || 0);
   const avgBreakMinutes = Number(safeSummary.weeklyStats?.avgBreakMinutes || 0);
@@ -132,6 +244,209 @@ function Dashboard({ onLogout }) {
     (Number(safeSummary.weeklyStats?.avgExercise || 0) / 45) * 25 +
     (Number(safeSummary.todayLog?.moodRating || 5) / 10) * 30;
   const wellnessRhythm = Math.max(0, Math.min(100, Math.round(wellnessRaw)));
+  const wellnessLabel =
+    wellnessRhythm >= 75 ? "Feeling Good" : wellnessRhythm >= 45 ? "Steady Rhythm" : "Needs Attention";
+  const todayTasks = (safeSummary.upcomingSessions || []).filter((session) => {
+    const date = new Date(session.scheduledDate);
+    if (Number.isNaN(date.getTime())) return false;
+    const now = new Date();
+    return (
+      date.getFullYear() === now.getFullYear() &&
+      date.getMonth() === now.getMonth() &&
+      date.getDate() === now.getDate()
+    );
+  });
+  const todayTaskCount = todayTasks.length;
+  const nextUpcomingTasks = (safeSummary.upcomingSessions || [])
+    .filter((session) => {
+      const date = new Date(session.scheduledDate);
+      return !Number.isNaN(date.getTime()) && date >= new Date();
+    })
+    .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate))
+    .slice(0, 2);
+  const toDateKey = (value) => {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+    return `${date.getFullYear()}-${month}-${day}`;
+  };
+  const todayDateKey = toDateKey(new Date());
+  const taskStorageKey = "todayTaskCompletion";
+
+  const dashboardThemeStyle = {
+    "--theme-bg": theme.bg,
+    "--theme-card": theme.card,
+    "--theme-card-secondary": theme.cardSecondary,
+    "--theme-text": theme.text,
+    "--theme-text-muted": theme.textMuted,
+    "--theme-accent": theme.accent,
+    "--theme-accent-text": theme.accentText,
+    "--theme-border": theme.border,
+    "--theme-button-bg": theme.buttonBg,
+    "--theme-button-text": theme.buttonText,
+    "--dash-bg-1": theme.bg,
+    "--dash-bg-2": theme.bg,
+    "--dash-surface": theme.card,
+    "--dash-surface-soft": theme.cardSecondary,
+    "--dash-ink-900": theme.text,
+    "--dash-ink-700": theme.text,
+    "--dash-ink-500": theme.textMuted,
+    "--dash-primary": theme.accent,
+    "--dash-primary-strong": theme.accent,
+    "--dash-accent": theme.accent,
+    "--dash-success": theme.accent,
+    "--dash-danger": theme.accent,
+    "--dash-border": theme.border,
+  };
+
+  const buildTaskKey = (task) => {
+    const idPart = task.id || task._id || task.scheduledDate || task.subject || "task";
+    return `${idPart}-${toDateKey(task.scheduledDate) || "date-unknown"}`;
+  };
+
+  const activityDateKeys = useMemo(() => {
+    const keys = new Set();
+
+    (safeSummary.recentLogs || []).forEach((log) => {
+      const key = toDateKey(log?.date || log?.logDate);
+      if (key) keys.add(key);
+    });
+
+    return keys;
+  }, [safeSummary.recentLogs]);
+
+  const weekDays = useMemo(() => {
+    const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const today = new Date();
+    const mondayOffset = (today.getDay() + 6) % 7;
+    const monday = new Date(today);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(today.getDate() - mondayOffset);
+    const todayKey = toDateKey(today);
+
+    return labels.map((label, index) => {
+      const date = new Date(monday);
+      date.setDate(monday.getDate() + index);
+      const key = toDateKey(date);
+      return {
+        label,
+        key,
+        isActive: key ? activityDateKeys.has(key) : false,
+        isToday: key === todayKey,
+      };
+    });
+  }, [activityDateKeys]);
+
+  const currentStreak = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let streak = 0;
+    const cursor = new Date(today);
+
+    while (true) {
+      const key = toDateKey(cursor);
+      if (!key || !activityDateKeys.has(key)) break;
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+
+    return streak;
+  }, [activityDateKeys]);
+
+  const completedTaskCount = useMemo(
+    () => todayTasks.filter((task) => Boolean(completedTaskMap[buildTaskKey(task)])).length,
+    [todayTasks, completedTaskMap]
+  );
+
+  const taskProgressPercent = todayTaskCount
+    ? Math.round((completedTaskCount / todayTaskCount) * 100)
+    : 0;
+
+  const earnedBadges = useMemo(() => {
+    const badgeRules = [
+      {
+        min: 7,
+        title: "7 Day Streak",
+        subtitle: "Logged in 7 days in a row!",
+        icon: "★",
+      },
+      {
+        min: 14,
+        title: "14 Day Streak",
+        subtitle: "Logged in 14 days in a row!",
+        icon: "★",
+      },
+      {
+        min: 21,
+        title: "21 Day Streak",
+        subtitle: "Logged in 21 days in a row!",
+        icon: "★",
+      },
+      {
+        min: 30,
+        title: "Perfect Month",
+        subtitle: "Logged in 30 days in a row!",
+        icon: "🏆",
+      },
+    ];
+
+    return badgeRules.filter((badge) => currentStreak >= badge.min);
+  }, [currentStreak]);
+
+  useEffect(() => {
+    localStorage.setItem("dashboardTheme", themeName);
+  }, [themeName]);
+
+  useEffect(() => {
+    try {
+      const savedMood = JSON.parse(localStorage.getItem("moodLog") || "{}");
+      if (savedMood?.date === todayDateKey && savedMood?.mood) {
+        setSelectedMood(savedMood.mood);
+        setMoodLockedForToday(true);
+      } else {
+        setSelectedMood(null);
+        setMoodLockedForToday(false);
+      }
+    } catch (error) {
+      console.warn("Could not load moodLog from localStorage", error);
+    }
+
+    try {
+      const savedTasks = JSON.parse(localStorage.getItem(taskStorageKey) || "{}");
+      if (savedTasks?.date === todayDateKey && savedTasks?.completed) {
+        setCompletedTaskMap(savedTasks.completed);
+      } else {
+        setCompletedTaskMap({});
+      }
+    } catch (error) {
+      console.warn("Could not load task completion from localStorage", error);
+    }
+  }, [todayDateKey]);
+
+  const handleMoodPick = (moodEmoji) => {
+    if (moodLockedForToday) return;
+    const entry = {
+      date: todayDateKey,
+      mood: moodEmoji,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem("moodLog", JSON.stringify(entry));
+    setSelectedMood(moodEmoji);
+    setMoodLockedForToday(true);
+  };
+
+  const handleTaskToggle = (task, isChecked) => {
+    const key = buildTaskKey(task);
+    setCompletedTaskMap((prev) => {
+      const next = { ...prev, [key]: isChecked };
+      localStorage.setItem(
+        taskStorageKey,
+        JSON.stringify({ date: todayDateKey, completed: next })
+      );
+      return next;
+    });
+  };
 
   const fetchDashboard = async () => {
     try {
@@ -311,48 +626,181 @@ function Dashboard({ onLogout }) {
   }
 
   return (
-    <div className="dashboard-container">
-      <div className="page-glow page-glow-left" aria-hidden="true" />
-      <div className="page-glow page-glow-right" aria-hidden="true" />
+    <div className="dashboard-container" style={dashboardThemeStyle}>
+      <section className="dashboard-top-banner" aria-label="Student dashboard banner">
+        <div className="banner-brand-row">
+          <div className="banner-logo-circle" aria-hidden="true">
+            <span>SW</span>
+          </div>
+          <h1>
+            Student Well-Being <span>&</span> Performance Tracker
+          </h1>
+        </div>
+        <div className="banner-controls">
+          <div className="theme-switcher">
+            <span style={{ color: theme.textMuted }}>Theme</span>
+            <div className="theme-dot-row">
+              {Object.entries(themes).map(([key, item]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setThemeName(key)}
+                  aria-label={`Switch to ${item.name} theme`}
+                  title={item.name}
+                  style={{
+                    width: key === themeName ? "22px" : "18px",
+                    height: key === themeName ? "22px" : "18px",
+                    borderRadius: "50%",
+                    border: "none",
+                    outline: key === themeName ? "2px solid #ffffff" : "none",
+                    outlineOffset: key === themeName ? "3px" : "0",
+                    background: themeDotColors[key],
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                />
+              ))}
+            </div>
+          </div>
 
-      <header className="dashboard-header glass-card">
-        <div>
-          <p className="header-kicker">Student Command Center</p>
-          <h1>Focus, Wellness, and Progress</h1>
-          <p>Move through each feature one by one using the workspace tabs below.</p>
+          <div className="banner-stats-row">
+            <article className="banner-stat-card">
+              <small>Wellness</small>
+              <strong>{wellnessRhythm}%</strong>
+              <span>Mood score</span>
+            </article>
+            <article className="banner-stat-card">
+              <small>Performance</small>
+              <strong>{assignmentCompletionRate}%</strong>
+              <span>Avg grade</span>
+            </article>
+            <article className="banner-stat-card">
+              <small>Today</small>
+              <strong>{todayTaskCount}</strong>
+              <span>Tasks scheduled</span>
+            </article>
+          </div>
         </div>
-        <div className="header-actions">
-          <button
-            onClick={() => {
-              if (hasDailyLogs) window.location.hash = "#analytics";
-            }}
-            className="btn-analytics"
-            disabled={!hasDailyLogs}
-            aria-disabled={!hasDailyLogs}
-            title={hasDailyLogs ? "View your analytics" : "Add a daily log to unlock analytics"}
-          >
-            Open Analytics
-          </button>
-          <button
-            onClick={handleRefreshAll}
-            className="btn-secondary"
-            disabled={isRefreshing}
-          >
-            {isRefreshing ? "Refreshing..." : "Refresh"}
-          </button>
-          <button
-            onClick={() => {
-              localStorage.removeItem("token");
-              localStorage.removeItem("user");
-              if (onLogout) onLogout();
-              window.location.reload();
-            }}
-            className="btn-logout"
-          >
-            Logout
-          </button>
-        </div>
-      </header>
+      </section>
+
+      <section className="dashboard-quick-insights" aria-label="Quick dashboard insights">
+        <article className="insight-card-dark">
+          <h3>Wellness</h3>
+          <strong>{wellnessRhythm}%</strong>
+          <p>{wellnessLabel}</p>
+        </article>
+
+        <article className="insight-card-dark">
+          <h3>Performance</h3>
+          <strong>{averagePerformance}%</strong>
+          <div className="insight-progress-track" aria-hidden="true">
+            <div className="insight-progress-fill" style={{ width: `${averagePerformance}%` }} />
+          </div>
+          <p>Average assignment progress</p>
+        </article>
+
+        <article className="insight-card-dark">
+          <h3>Schedule</h3>
+          <strong>{todayTaskCount} today</strong>
+          {nextUpcomingTasks.length ? (
+            <ul className="insight-task-list">
+              {nextUpcomingTasks.map((task) => (
+                <li key={task.id || task._id || task.scheduledDate}>
+                  <span>{task.subject || "Study session"}</span>
+                  <small>{new Date(task.scheduledDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No upcoming tasks found.</p>
+          )}
+        </article>
+      </section>
+
+      <StreakDashboard streakCount={currentStreak} weekDays={weekDays} />
+
+      {earnedBadges.length > 0 && (
+        <section className="achievements-card" aria-label="Earned achievements">
+          <h3>Achievements</h3>
+          <div className="achievements-row">
+            {earnedBadges.map((badge) => (
+              <article className="achievement-item" key={badge.title}>
+                <div className="achievement-icon" aria-hidden="true">
+                  <span>{badge.icon}</span>
+                </div>
+                <strong>{badge.title}</strong>
+                <p>{badge.subtitle}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="dashboard-dual-widgets" aria-label="Mood log and task checklist">
+        <article className="widget-dark-card quick-mood-widget">
+          <h3>Quick Mood Log</h3>
+          <p>How are you feeling today?</p>
+          <div className="mood-button-row">
+            {moodOptions.map((emoji) => {
+              const isSelected = selectedMood === emoji;
+              return (
+                <button
+                  key={emoji}
+                  type="button"
+                  className={`mood-btn ${isSelected ? "active" : ""}`}
+                  onClick={() => handleMoodPick(emoji)}
+                  disabled={moodLockedForToday && !isSelected}
+                  aria-label={`Log mood ${emoji}`}
+                >
+                  {emoji}
+                </button>
+              );
+            })}
+          </div>
+          {moodLockedForToday && selectedMood && (
+            <small className="widget-footnote">Mood logged for today: {selectedMood}</small>
+          )}
+        </article>
+
+        <article className="widget-dark-card tasks-widget">
+          <h3>Today's Tasks</h3>
+          {todayTasks.length ? (
+            <ul className="task-checklist">
+              {todayTasks.map((task) => {
+                const taskKey = buildTaskKey(task);
+                const checked = Boolean(completedTaskMap[taskKey]);
+                return (
+                  <li key={taskKey}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => handleTaskToggle(task, event.target.checked)}
+                      />
+                      <span>{task.subject || "Study session"}</span>
+                    </label>
+                    <small>
+                      {new Date(task.scheduledDate).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </small>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="tasks-empty">No tasks for today - enjoy your day!</p>
+          )}
+
+          <div className="task-progress-wrap" aria-hidden="true">
+            <div className="task-progress-track">
+              <div className="task-progress-fill" style={{ width: `${taskProgressPercent}%` }} />
+            </div>
+            <span>{completedTaskCount} of {todayTaskCount} tasks done</span>
+          </div>
+        </article>
+      </section>
 
       <section className="student-command-bar glass-card">
         <div className="command-bar-copy">
@@ -360,6 +808,31 @@ function Dashboard({ onLogout }) {
           <p>Use smart shortcuts to move through your daily workflow faster.</p>
         </div>
         <div className="command-bar-actions">
+          <button
+            className="btn-analytics"
+            onClick={() => {
+              if (hasDailyLogs) window.location.hash = "#analytics";
+            }}
+            disabled={!hasDailyLogs}
+            aria-disabled={!hasDailyLogs}
+            title={hasDailyLogs ? "View your analytics" : "Add a daily log to unlock analytics"}
+          >
+            Open Analytics
+          </button>
+          <button className="btn-secondary" onClick={handleRefreshAll} disabled={isRefreshing}>
+            {isRefreshing ? "Refreshing..." : "Refresh"}
+          </button>
+          <button
+            className="btn-logout"
+            onClick={() => {
+              localStorage.removeItem("token");
+              localStorage.removeItem("user");
+              if (onLogout) onLogout();
+              window.location.reload();
+            }}
+          >
+            Logout
+          </button>
           <button className="btn-primary" onClick={() => { setActiveView("daily-log"); setShowLogForm(true); }}>
             Log Today
           </button>

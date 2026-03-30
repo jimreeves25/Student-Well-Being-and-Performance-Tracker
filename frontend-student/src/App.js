@@ -89,33 +89,39 @@ function App() {
     setCurrentPage("login");
   };
 
+  let pageContent;
+
   if (isAuthenticated && currentPage === "dashboard") {
-    if (authRole === "parent") {
-      return <ParentDashboard onLogout={handleLogout} />;
-    }
-    return <Dashboard onLogout={handleLogout} />;
-  }
-
-  if (isAuthenticated && currentPage === "analytics") {
-    return <Analytics summary={summary} />;
-  }
-
-  if (currentPage === "signup") {
-    return (
+    pageContent =
+      authRole === "parent" ? (
+        <ParentDashboard onLogout={handleLogout} />
+      ) : (
+        <Dashboard onLogout={handleLogout} />
+      );
+  } else if (isAuthenticated && currentPage === "analytics") {
+    pageContent = <Analytics summary={summary} />;
+  } else if (currentPage === "signup") {
+    pageContent = (
       <Signup
         initialAccountType={authViewAccountType}
         onSignupSuccess={handleSignupSuccess}
         onGoToLogin={goToLogin}
       />
     );
+  } else {
+    pageContent = (
+      <Login
+        initialAccountType={authViewAccountType}
+        onLoginSuccess={handleLoginSuccess}
+        onGoToSignup={goToSignup}
+      />
+    );
   }
 
   return (
-    <Login
-      initialAccountType={authViewAccountType}
-      onLoginSuccess={handleLoginSuccess}
-      onGoToSignup={goToSignup}
-    />
+    <div className="app-shell">
+      <main className="app-main-content">{pageContent}</main>
+    </div>
   );
 }
 
