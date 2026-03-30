@@ -4,9 +4,9 @@ import "../styles/Login.css";
 
 export default function Signup({ initialAccountType = "student", onSignupSuccess, onGoToLogin }) {
   const [accountType, setAccountType] = useState(initialAccountType);
-    useEffect(() => {
-      setAccountType(initialAccountType === "parent" ? "parent" : "student");
-    }, [initialAccountType]);
+  useEffect(() => {
+    setAccountType(initialAccountType === "parent" ? "parent" : "student");
+  }, [initialAccountType]);
 
   const [form, setForm] = useState({
     name: "",
@@ -67,29 +67,33 @@ export default function Signup({ initialAccountType = "student", onSignupSuccess
   };
 
   return (
-    <div className="container">
+    <div className={`container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
       <div className="card">
-        <h1 className="title">Sign Up</h1>
-        <p className="subtitle">Create your {accountType === "parent" ? "Parent" : "Student"} Skillspring account</p>
+        <h1 className="title">Join Skillspring</h1>
+        <p className="subtitle">Create your {accountType === "parent" ? "Parent" : "Student"} account</p>
 
-        <div style={{ display: "flex", gap: "8px", marginBottom: "14px" }}>
+        <div className="account-switch">
           <button
             type="button"
-            className="login-btn"
-            style={{ margin: 0, opacity: accountType === "student" ? 1 : 0.65, padding: "10px 14px" }}
+            className={`account-pill ${accountType === "student" ? "active" : ""}`}
             onClick={() => setAccountType("student")}
           >
             Student
           </button>
           <button
             type="button"
-            className="login-btn"
-            style={{ margin: 0, opacity: accountType === "parent" ? 1 : 0.65, padding: "10px 14px", background: "#0d8a6a" }}
+            className={`account-pill ${accountType === "parent" ? "active" : ""}`}
             onClick={() => setAccountType("parent")}
           >
             Parent
           </button>
         </div>
+
+        {accountType === "parent" && (
+          <p className="mode-hint">
+            Use the student-provided verification code to link your account and unlock live guardian monitoring.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit}>
           <input 
@@ -134,13 +138,15 @@ export default function Signup({ initialAccountType = "student", onSignupSuccess
               required
             />
           )}
-          <button type="submit" className="login-btn">Sign Up</button>
+          <button type="submit" className="login-btn">
+            {accountType === "parent" ? "Create Parent Account" : "Create Student Account"}
+          </button>
         </form>
 
-        <p style={{ marginTop: "20px", color: "#666" }}>
+        <p className="signup-text">
           Already have an account?{" "}
           <span
-            style={{ color: "#667eea", cursor: "pointer", fontWeight: "bold" }}
+            className="signup-link"
             onClick={() => {
               if (typeof onGoToLogin === "function") {
                 onGoToLogin(accountType);

@@ -26,3 +26,4 @@ backend/database.sqlite-wal
 .DS_Store
 Thumbs.db
 .vscode/
+.vercel

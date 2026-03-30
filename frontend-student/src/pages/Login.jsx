@@ -42,38 +42,37 @@ function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup })
   };
 
   return (
-    <div className="container">
+    <div className={`container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
       <div className="card">
         <h1 className="title">Skillspring</h1>
-        <p className="subtitle">Smart Skill & Performance Manager</p>
+        <p className="subtitle">
+          {accountType === "parent"
+            ? "Guardian Access for live learning insights"
+            : "Smart Skill & Performance Manager"}
+        </p>
 
-        <div style={{ display: "flex", gap: "8px", marginBottom: "14px" }}>
+        <div className="account-switch">
           <button
             type="button"
-            className="login-btn"
-            style={{
-              margin: 0,
-              opacity: accountType === "student" ? 1 : 0.65,
-              padding: "10px 14px",
-            }}
+            className={`account-pill ${accountType === "student" ? "active" : ""}`}
             onClick={() => setAccountType("student")}
           >
             Student
           </button>
           <button
             type="button"
-            className="login-btn"
-            style={{
-              margin: 0,
-              opacity: accountType === "parent" ? 1 : 0.65,
-              padding: "10px 14px",
-              background: "#0d8a6a",
-            }}
+            className={`account-pill ${accountType === "parent" ? "active" : ""}`}
             onClick={() => setAccountType("parent")}
           >
             Parent
           </button>
         </div>
+
+        {accountType === "parent" && (
+          <p className="mode-hint">
+            Monitor attendance, focus shifts, and alert timelines from your parent dashboard.
+          </p>
+        )}
 
         <input
           type="email"
@@ -91,10 +90,10 @@ function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup })
           {loading ? "Logging in..." : `Login as ${accountType === "parent" ? "Parent" : "Student"}`}
         </button>
 
-        <p style={{ marginTop: "20px", color: "#666" }}>
+        <p className="signup-text">
           Don't have an account?{" "}
           <span
-            style={{ color: "#667eea", cursor: "pointer", fontWeight: "bold" }}
+            className="signup-link"
             onClick={() => {
               if (typeof onGoToSignup === "function") {
                 onGoToSignup(accountType);

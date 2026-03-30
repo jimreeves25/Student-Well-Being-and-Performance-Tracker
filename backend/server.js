@@ -1,9 +1,12 @@
 const express = require("express");
+const http = require("http");
 const { Sequelize } = require("sequelize");
 const cors = require("cors");
 require("dotenv").config();
+const { initializeRealtimeServer } = require("./socket/realtime");
 
 const app = express();
+const httpServer = http.createServer(app);
 
 // Middleware
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000")
@@ -71,6 +74,9 @@ async function runLegacySchemaFixes() {
   await ensureColumn("DailyLogs", "breakMinutes", "INTEGER DEFAULT 0");
   await ensureColumn("Users", "parentLinkCode", "VARCHAR(255)");
   await ensureColumn("Users", "parentLinkCodeExpiresAt", "DATETIME");
+  await ensureColumn("ParentUsers", "notifyByEmail", "BOOLEAN DEFAULT 1");
+  await ensureColumn("ParentUsers", "notifyByDashboard", "BOOLEAN DEFAULT 1");
+  await ensureColumn("ParentUsers", "notifyByPush", "BOOLEAN DEFAULT 0");
 }
 
 // Test database connection and sync models
@@ -114,7 +120,9 @@ app.get("/", (req, res) => {
 });
 
 // Start server
+initializeRealtimeServer(httpServer, allowedOrigins);
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
 });

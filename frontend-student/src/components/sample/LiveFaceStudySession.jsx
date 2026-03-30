@@ -5,6 +5,10 @@ import {
   heartbeatLiveSessionTracking,
   startLiveSessionTracking,
 } from "../../services/api";
+import {
+  connectStudentSocket,
+  disconnectStudentSocket,
+} from "../../services/socket";
 import "../../styles/LiveFaceStudySession.css";
 
 const DETECTION_INTERVAL_MS = 500;
@@ -189,6 +193,12 @@ function LiveFaceStudySession({ studentContext = {} }) {
   const drowsyEmaRef = useRef(null);
   const stressHistoryRef = useRef([]);
   const fatigueHistoryRef = useRef([]);
+  const socketRef = useRef(null);
+  const sessionIdRef = useRef(null);
+  const studentIdRef = useRef(null);
+  const lastInteractionAtRef = useRef(Date.now());
+  const lastTypingAtRef = useRef(0);
+  const pageHiddenRef = useRef(false);
 
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState("");
@@ -219,8 +229,61 @@ function LiveFaceStudySession({ studentContext = {} }) {
   const activeSecondsRef = useRef(0);
   const inactiveSecondsRef = useRef(0);
   const isFaceDetectedRef = useRef(false);
+  const realtimeStateRef = useRef({
+    focusScore: 0,
+    drowsyRisk: 0,
+    stressScore: 0,
+    fatigueScore: 0,
+    noFaceSeconds: 0,
+  });
 
   const noFaceSeconds = Math.round((noFaceStreak * DETECTION_INTERVAL_MS) / 1000);
+
+  const resolveStudentId = useCallback(() => {
+    if (studentIdRef.current) return studentIdRef.current;
+
+    const rawUser = localStorage.getItem("user");
+    if (!rawUser) return null;
+
+    try {
+      const parsed = JSON.parse(rawUser);
+      const nextId = Number(parsed?.id || 0);
+      if (!nextId) return null;
+      studentIdRef.current = nextId;
+      return nextId;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const emitRealtimeActivity = useCallback((cameraStatus = null, forceSleepDetection = false) => {
+    const studentId = resolveStudentId();
+    if (!studentId || !socketRef.current) return;
+
+    const now = Date.now();
+    const inactivityDuration = Math.max(0, Math.round((now - lastInteractionAtRef.current) / 1000));
+    const typingActivity = now - lastTypingAtRef.current <= 10000;
+    const nextCameraStatus = cameraStatus || (pageHiddenRef.current ? "hidden" : (isFaceDetectedRef.current ? "active" : "inactive"));
+    const realtimeState = realtimeStateRef.current;
+    const sleepDetection =
+      forceSleepDetection ||
+      inactivityDuration > 60 ||
+      nextCameraStatus === "tab_closed" ||
+      realtimeState.drowsyRisk >= DROWSY_ALERT_THRESHOLD;
+
+    socketRef.current.emit("student_activity", {
+      studentId,
+      focusLevel: Number(realtimeState.focusScore || 0),
+      cameraStatus: nextCameraStatus,
+      typingActivity,
+      sleepDetection,
+      inactivityDuration,
+      stressScore: Number(realtimeState.stressScore || 0),
+      fatigueScore: Number(realtimeState.fatigueScore || 0),
+      noFaceSeconds: Number(realtimeState.noFaceSeconds || 0),
+      sessionId: sessionIdRef.current,
+    });
+  }, [resolveStudentId]);
 
   const faceConfidence = useMemo(() => {
     const total = faceDetections + noFaceStreak;
@@ -376,10 +439,20 @@ function LiveFaceStudySession({ studentContext = {} }) {
         isActive: isFaceDetectedRef.current,
       }).catch(() => {});
     }
+
+    emitRealtimeActivity(isFaceDetectedRef.current ? "active" : "inactive");
+    const studentId = resolveStudentId();
+    if (socketRef.current && studentId) {
+      socketRef.current.emit("student_offline", { studentId, reason: "student_stopped_session" });
+    }
+
     endLiveSessionTracking().catch(() => {});
+    disconnectStudentSocket();
+    socketRef.current = null;
+    sessionIdRef.current = null;
     activeSecondsRef.current = 0;
     inactiveSecondsRef.current = 0;
-  }, [stopDrowsyAlarm]);
+  }, [emitRealtimeActivity, resolveStudentId, stopDrowsyAlarm]);
 
   const stressBand = useMemo(() => {
     if (stressScore >= 75) return "High";
@@ -480,6 +553,13 @@ function LiveFaceStudySession({ studentContext = {} }) {
           const smoothedDrowsyRisk = Math.round(nextEma);
           setDrowsyRisk(smoothedDrowsyRisk);
           setFocusScore(inferredState.focusScore);
+          realtimeStateRef.current = {
+            focusScore: inferredState.focusScore,
+            drowsyRisk: smoothedDrowsyRisk,
+            stressScore: inferredState.stressScore,
+            fatigueScore: inferredState.fatigueScore,
+            noFaceSeconds,
+          };
           setRegulationTip(inferredState.regulationTip);
           setActivityOptions(getActivitySet(inferredState.moodTag, inferredState.stressScore, inferredState.fatigueScore));
           updateTrendMetrics(inferredState.stressScore, inferredState.fatigueScore);
@@ -536,9 +616,11 @@ function LiveFaceStudySession({ studentContext = {} }) {
         activeSecondsRef.current += DETECTION_INTERVAL_MS / 1000;
         setFaceDetections((prev) => prev + 1);
         setNoFaceStreak(0);
+        realtimeStateRef.current.noFaceSeconds = 0;
       } else {
         inactiveSecondsRef.current += DETECTION_INTERVAL_MS / 1000;
         setNoFaceStreak((prev) => prev + 1);
+        realtimeStateRef.current.noFaceSeconds = noFaceSeconds;
         drowsyConsecutiveRef.current = 0;
         awakeConsecutiveRef.current = 0;
         drowsyEmaRef.current = null;
@@ -660,10 +742,31 @@ function LiveFaceStudySession({ studentContext = {} }) {
       awakeConsecutiveRef.current = 0;
       drowsyEmaRef.current = null;
       lastMoodRef.current = "Unknown";
+      lastInteractionAtRef.current = Date.now();
+      lastTypingAtRef.current = Date.now();
+      pageHiddenRef.current = false;
+      realtimeStateRef.current = {
+        focusScore: 0,
+        drowsyRisk: 0,
+        stressScore: 0,
+        fatigueScore: 0,
+        noFaceSeconds: 0,
+      };
       sessionStartRef.current = Date.now();
       activeSecondsRef.current = 0;
       inactiveSecondsRef.current = 0;
-      await startLiveSessionTracking().catch(() => {});
+      const liveSessionResponse = await startLiveSessionTracking().catch(() => null);
+      sessionIdRef.current = liveSessionResponse?.session?.id || null;
+
+      const studentToken = localStorage.getItem("token");
+      const studentId = resolveStudentId();
+      if (studentToken && studentId) {
+        socketRef.current = connectStudentSocket(studentToken);
+        socketRef.current?.emit("student_online", {
+          studentId,
+          sessionId: sessionIdRef.current,
+        });
+      }
 
       detectionTimerRef.current = window.setInterval(() => {
         const seconds = Math.floor((Date.now() - sessionStartRef.current) / 1000);
@@ -676,6 +779,8 @@ function LiveFaceStudySession({ studentContext = {} }) {
       }, SUGGESTION_INTERVAL_MS);
 
       heartbeatTimerRef.current = window.setInterval(() => {
+        emitRealtimeActivity();
+
         if (activeSecondsRef.current === 0 && inactiveSecondsRef.current === 0) return;
 
         heartbeatLiveSessionTracking({
@@ -701,6 +806,63 @@ function LiveFaceStudySession({ studentContext = {} }) {
       fetchSuggestion("face_missing");
     }
   }, [noFaceSeconds, fetchSuggestion]);
+
+  useEffect(() => {
+    realtimeStateRef.current.noFaceSeconds = noFaceSeconds;
+  }, [noFaceSeconds]);
+
+  useEffect(() => {
+    const markInteraction = () => {
+      lastInteractionAtRef.current = Date.now();
+    };
+
+    const markTyping = () => {
+      const now = Date.now();
+      lastTypingAtRef.current = now;
+      lastInteractionAtRef.current = now;
+    };
+
+    const onVisibility = () => {
+      pageHiddenRef.current = document.hidden;
+      if (!document.hidden) {
+        lastInteractionAtRef.current = Date.now();
+      }
+    };
+
+    const onBeforeUnload = () => {
+      if (!isRunning) return;
+      const studentId = resolveStudentId();
+      if (!socketRef.current || !studentId) return;
+
+      socketRef.current.emit("student_activity", {
+        studentId,
+        focusLevel: Number(realtimeStateRef.current.focusScore || 0),
+        cameraStatus: "tab_closed",
+        typingActivity: false,
+        sleepDetection: true,
+        inactivityDuration: Math.max(0, Math.round((Date.now() - lastInteractionAtRef.current) / 1000)),
+      });
+      socketRef.current.emit("student_offline", { studentId, reason: "tab_closed" });
+    };
+
+    window.addEventListener("mousemove", markInteraction);
+    window.addEventListener("mousedown", markInteraction);
+    window.addEventListener("touchstart", markInteraction);
+    window.addEventListener("scroll", markInteraction, { passive: true });
+    window.addEventListener("keydown", markTyping);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      window.removeEventListener("mousemove", markInteraction);
+      window.removeEventListener("mousedown", markInteraction);
+      window.removeEventListener("touchstart", markInteraction);
+      window.removeEventListener("scroll", markInteraction);
+      window.removeEventListener("keydown", markTyping);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [isRunning, resolveStudentId]);
 
   useEffect(() => {
     if (!cameraPopup) return;

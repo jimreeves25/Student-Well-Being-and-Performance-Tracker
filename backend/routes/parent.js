@@ -20,6 +20,15 @@ const INACTIVE_SECONDS_THRESHOLD = 600;
 
 const normalizeEmail = (value = "") => String(value).trim().toLowerCase();
 const normalizeStudentId = (value = "") => String(value).trim();
+const toBoolean = (value, fallback = false) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const next = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(next)) return true;
+    if (["false", "0", "no", "off"].includes(next)) return false;
+  }
+  return fallback;
+};
 
 const makeToken = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 
@@ -72,6 +81,13 @@ const createParentAlerts = async ({ studentId, alertType, severity, message, met
   if (!parents.length) return;
 
   for (const parent of parents) {
+    const dashboardEnabled = parent.notifyByDashboard !== false;
+    const emailEnabled = parent.notifyByEmail === true;
+
+    if (!dashboardEnabled && !emailEnabled) {
+      continue;
+    }
+
     const existing = await ParentAlert.findOne({
       where: {
         parentId: parent.id,
@@ -85,23 +101,29 @@ const createParentAlerts = async ({ studentId, alertType, severity, message, met
 
     if (existing) continue;
 
-    const alert = await ParentAlert.create({
-      parentId: parent.id,
-      studentId,
-      alertType,
-      severity,
-      message,
-      metadata: metadata ? JSON.stringify(metadata) : null,
-      deliveredByEmail: false,
-    });
+    let alert = null;
+    if (dashboardEnabled) {
+      alert = await ParentAlert.create({
+        parentId: parent.id,
+        studentId,
+        alertType,
+        severity,
+        message,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+        deliveredByEmail: false,
+      });
+    }
 
-    if (parent.notifyByEmail) {
+    if (emailEnabled) {
       await sendEmailNotification({
         to: parent.email,
         subject: `Student Monitoring Alert: ${alertType}`,
         message,
       });
-      await alert.update({ deliveredByEmail: true });
+
+      if (alert) {
+        await alert.update({ deliveredByEmail: true });
+      }
     }
   }
 };
@@ -662,14 +684,37 @@ router.get("/alerts", parentAuth, async (req, res) => {
       return res.status(403).json({ message: "Parent access not approved" });
     }
 
+    const { from, to, q, limit } = req.query;
+    const whereClause = { parentId: req.parentId };
+    const createdAtRange = {};
+
+    if (from) {
+      const parsedFrom = new Date(from);
+      if (!Number.isNaN(parsedFrom.getTime())) {
+        createdAtRange[Op.gte] = parsedFrom;
+      }
+    }
+
+    if (to) {
+      const parsedTo = new Date(to);
+      if (!Number.isNaN(parsedTo.getTime())) {
+        createdAtRange[Op.lte] = parsedTo;
+      }
+    }
+
+    if (Object.keys(createdAtRange).length) {
+      whereClause.createdAt = createdAtRange;
+    }
+
+    const parsedLimit = Math.max(1, Math.min(200, Number(limit || 30)));
+
     const alerts = await ParentAlert.findAll({
-      where: { parentId: req.parentId },
+      where: whereClause,
       order: [["createdAt", "DESC"]],
-      limit: 30,
+      limit: parsedLimit,
     });
 
-    res.json(
-      alerts.map((alert) => ({
+    const mapped = alerts.map((alert) => ({
         id: alert.id,
         alertType: alert.alertType,
         severity: alert.severity,
@@ -677,8 +722,19 @@ router.get("/alerts", parentAuth, async (req, res) => {
         isRead: alert.isRead,
         createdAt: alert.createdAt,
         metadata: alert.metadata ? JSON.parse(alert.metadata) : null,
-      }))
-    );
+      }));
+
+    if (q && String(q).trim()) {
+      const query = String(q).trim().toLowerCase();
+      return res.json(
+        mapped.filter((item) => {
+          const text = `${item.alertType} ${item.severity} ${item.message}`.toLowerCase();
+          return text.includes(query);
+        })
+      );
+    }
+
+    res.json(mapped);
   } catch (error) {
     console.error("Fetch parent alerts error:", error);
     res.status(500).json({ message: "Server error", error: error.message });
@@ -751,16 +807,76 @@ router.get("/reports", parentAuth, async (req, res) => {
     const activeMinutes = sessions.reduce((sum, item) => sum + Math.round((item.activeSeconds || 0) / 60), 0);
     const inactiveMinutes = sessions.reduce((sum, item) => sum + Math.round((item.inactiveSeconds || 0) / 60), 0);
 
-    res.json({
+    const payload = {
       generatedAt: new Date(),
       weekly,
       engagement: {
         activeMinutes,
         inactiveMinutes,
       },
-    });
+    };
+
+    const { format } = req.query;
+    if (String(format || "").toLowerCase() === "csv") {
+      const header = ["week", "avgStudyHours", "avgFocusMinutes", "avgBreakMinutes"];
+      const rows = weekly.map((row) => [row.week, row.avgStudyHours, row.avgFocusMinutes, row.avgBreakMinutes]);
+      rows.push(["engagement_active_minutes", activeMinutes, "", ""]);
+      rows.push(["engagement_inactive_minutes", inactiveMinutes, "", ""]);
+      const csv = [header.join(","), ...rows.map((row) => row.join(","))].join("\n");
+
+      res.setHeader("Content-Type", "text/csv");
+      res.setHeader("Content-Disposition", "attachment; filename=parent-weekly-report.csv");
+      return res.send(csv);
+    }
+
+    res.json(payload);
   } catch (error) {
     console.error("Parent reports error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.get("/preferences/notifications", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+
+    res.json({
+      notifyByEmail: !!parent.notifyByEmail,
+      notifyByDashboard: !!parent.notifyByDashboard,
+      notifyByPush: !!parent.notifyByPush,
+    });
+  } catch (error) {
+    console.error("Fetch notification preferences error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.patch("/preferences/notifications", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+
+    const nextNotifyByEmail = toBoolean(req.body.notifyByEmail, !!parent.notifyByEmail);
+    const nextNotifyByDashboard = toBoolean(req.body.notifyByDashboard, !!parent.notifyByDashboard);
+    const nextNotifyByPush = toBoolean(req.body.notifyByPush, !!parent.notifyByPush);
+
+    await parent.update({
+      notifyByEmail: nextNotifyByEmail,
+      notifyByDashboard: nextNotifyByDashboard,
+      notifyByPush: nextNotifyByPush,
+    });
+
+    res.json({
+      message: "Notification preferences updated",
+      preferences: {
+        notifyByEmail: !!parent.notifyByEmail,
+        notifyByDashboard: !!parent.notifyByDashboard,
+        notifyByPush: !!parent.notifyByPush,
+      },
+    });
+  } catch (error) {
+    console.error("Update notification preferences error:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });

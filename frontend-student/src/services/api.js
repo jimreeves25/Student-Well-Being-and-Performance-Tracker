@@ -172,6 +172,23 @@ export const getStudySessions = async () => {
   return handleResponse(res);
 };
 
+export const createAssignment = async (data) => {
+  const res = await fetch(`${BASE_URL}/parent/student/assignments`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  return handleResponse(res);
+};
+
+export const getAssignments = async () => {
+  const res = await fetch(`${BASE_URL}/parent/student/assignments`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
 export const completeStudySession = async (sessionId) => {
   const res = await fetch(`${BASE_URL}/dashboard/study-session/${sessionId}/complete`, {
     method: "PATCH",
@@ -248,8 +265,15 @@ export const getParentDashboard = async () => {
   return handleResponse(res);
 };
 
-export const getParentAlerts = async () => {
-  const res = await fetch(`${BASE_URL}/parent/alerts`, {
+export const getParentAlerts = async (params = {}) => {
+  const searchParams = new URLSearchParams();
+  if (params.from) searchParams.set("from", params.from);
+  if (params.to) searchParams.set("to", params.to);
+  if (params.q) searchParams.set("q", params.q);
+  if (params.limit) searchParams.set("limit", String(params.limit));
+
+  const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
+  const res = await fetch(`${BASE_URL}/parent/alerts${suffix}`, {
     method: "GET",
     headers: getParentAuthHeaders(),
   });
@@ -268,6 +292,23 @@ export const getParentReports = async () => {
   const res = await fetch(`${BASE_URL}/parent/reports`, {
     method: "GET",
     headers: getParentAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const getParentNotificationPreferences = async () => {
+  const res = await fetch(`${BASE_URL}/parent/preferences/notifications`, {
+    method: "GET",
+    headers: getParentAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const updateParentNotificationPreferences = async (preferences) => {
+  const res = await fetch(`${BASE_URL}/parent/preferences/notifications`, {
+    method: "PATCH",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify(preferences),
   });
   return handleResponse(res);
 };
