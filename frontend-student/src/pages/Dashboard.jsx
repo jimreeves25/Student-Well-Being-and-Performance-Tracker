@@ -14,6 +14,12 @@ import AIChatbot from "../components/AIChatbot";
 import SmartScheduler from "../components/SmartScheduler";
 import DashboardCharts from "../components/DashboardCharts";
 import LiveFaceStudySession from "../components/sample/LiveFaceStudySession";
+import Header from "../components/dashboard/Header";
+import MoodTracker from "../components/dashboard/MoodTracker";
+import TaskList from "../components/dashboard/TaskList";
+import SettingsModal from "../components/settings/SettingsModal";
+import { loadFromStorage, saveToStorage } from "../utils/storage";
+import { changePassword, updateUserProfile, initializeUserAuth } from "../utils/userAuth";
 import "../styles/Dashboard.css";
 
 const VIEWS = [
@@ -101,10 +107,100 @@ const themeDotColors = {
   forest: "#2d8c45",
 };
 
-const StreakDashboard = ({ streakCount, weekDays }) => (
+const toDateKey = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+};
+
+const clampPercent = (value) => Math.max(0, Math.min(100, Math.round(value)));
+
+const calculateWellnessScoreFromMoodLogs = (recentLogs) => {
+  const today = new Date();
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(today.getDate() - 6);
+  sevenDaysAgo.setHours(0, 0, 0, 0);
+
+  const moodValues = (recentLogs || [])
+    .filter((log) => {
+      const date = new Date(log?.date || log?.logDate || log?.createdAt);
+      return !Number.isNaN(date.getTime()) && date >= sevenDaysAgo;
+    })
+    .map((log) => Number(log?.moodRating ?? log?.moodValue ?? log?.mood))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  if (!moodValues.length) return null;
+
+  const averageMood = moodValues.reduce((sum, value) => sum + value, 0) / moodValues.length;
+  return clampPercent((averageMood / 10) * 100);
+};
+
+const calculatePerformanceScoreFromTasks = (tasks) => {
+  if (!tasks?.length) return null;
+  const completed = tasks.filter((task) => task?.status === "completed").length;
+  return clampPercent((completed / tasks.length) * 100);
+};
+
+const collectActivityDateKeys = (recentLogs, tasks, sessions) => {
+  const keys = new Set();
+  const add = (value) => {
+    const key = toDateKey(value);
+    if (key) keys.add(key);
+  };
+
+  (recentLogs || []).forEach((log) => add(log?.date || log?.logDate || log?.createdAt));
+  (tasks || []).forEach((task) => add(task?.updatedAt || task?.createdAt));
+  (sessions || []).forEach((session) => add(session?.scheduledDate || session?.createdAt));
+
+  return keys;
+};
+
+const buildWeekDaysFromActivity = (activityKeys) => {
+  const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const today = new Date();
+  const mondayOffset = (today.getDay() + 6) % 7;
+  const monday = new Date(today);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(today.getDate() - mondayOffset);
+  const todayKey = toDateKey(today);
+
+  return labels.map((label, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    const key = toDateKey(date);
+    return {
+      label,
+      key,
+      isActive: key ? activityKeys.has(key) : false,
+      isToday: key === todayKey,
+    };
+  });
+};
+
+const calculateStreakCount = (activityKeys) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let streak = 0;
+  const cursor = new Date(today);
+
+  while (true) {
+    const key = toDateKey(cursor);
+    if (!key || !activityKeys.has(key)) break;
+    streak += 1;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+
+  return streak;
+};
+
+const StreakDashboard = ({ streakCount, weekDays, hasActivityData }) => (
   <section className="streak-dashboard-card" aria-label="Streak dashboard">
     <h3>Streak Dashboard</h3>
-    <div className="streak-count">🔥 {streakCount} day streak</div>
+    <div className="streak-count">
+      {hasActivityData ? `🔥 ${streakCount} day streak` : "No data available"}
+    </div>
 
     <div className="streak-week-row">
       {weekDays.map((day) => (
@@ -119,18 +215,35 @@ const StreakDashboard = ({ streakCount, weekDays }) => (
     </div>
 
     <p className="streak-message">
-      {streakCount > 0 ? "Keep it up! Log in tomorrow to continue" : "Start your streak today!"}
+      {!hasActivityData
+        ? "Log activities to start tracking your streak."
+        : streakCount > 0
+          ? "Keep it up! Log in tomorrow to continue"
+          : "Start your streak today!"}
     </p>
   </section>
 );
 
 function Dashboard({ onLogout }) {
-  const moodOptions = ["😞", "😐", "🙂", "😄", "🤩"];
   const [themeName, setThemeName] = useState(() => {
     const savedTheme = localStorage.getItem("dashboardTheme") || "dark";
     return savedTheme === "green" ? "forest" : savedTheme;
   });
-  const theme = themes[themeName] || themes.dark;
+  const [themeMode, setThemeMode] = useState(() => localStorage.getItem("dashboardThemeMode") || "system");
+  const [systemPrefersDark, setSystemPrefersDark] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : true
+  );
+  const effectiveThemeName =
+    themeMode === "light" || themeMode === "dark"
+      ? themeMode
+      : themeMode === "system"
+        ? systemPrefersDark
+          ? "dark"
+          : "light"
+        : themeName;
+  const theme = themes[effectiveThemeName] || themes.dark;
   const [summary, setSummary] = useState(null);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -141,9 +254,17 @@ function Dashboard({ onLogout }) {
   const [parentCode, setParentCode] = useState(null);
   const [parentRequests, setParentRequests] = useState([]);
   const [allowWellnessShare, setAllowWellnessShare] = useState(true);
-  const [selectedMood, setSelectedMood] = useState(null);
-  const [moodLockedForToday, setMoodLockedForToday] = useState(false);
+  const [todayMoodLog, setTodayMoodLog] = useState(null);
   const [completedTaskMap, setCompletedTaskMap] = useState({});
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsErrors, setSettingsErrors] = useState({});
+  const [settingsForm, setSettingsForm] = useState({
+    username: "",
+    email: "",
+    phone: "",
+    profilePicture: "",
+  });
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
 
   const [logForm, setLogForm] = useState({
     studyHours: 0,
@@ -175,78 +296,120 @@ function Dashboard({ onLogout }) {
     fetchAssignments();
   }, []);
 
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateSystemTheme = (event) => setSystemPrefersDark(event.matches);
+    mediaQuery.addEventListener("change", updateSystemTheme);
+    return () => mediaQuery.removeEventListener("change", updateSystemTheme);
+  }, []);
+
+  useEffect(() => {
+    // Initialize user auth system on first mount
+    initializeUserAuth();
+
+    try {
+      const savedUser = loadFromStorage("user", {});
+      const savedSettings = loadFromStorage("userSettings", {});
+
+      setSettingsForm({
+        username: savedSettings.username || savedUser.name || "",
+        email: savedSettings.email || savedUser.email || "",
+        phone: savedSettings.phone || savedUser.phone || "",
+        profilePicture: savedSettings.profilePicture || savedUser.profilePicture || "",
+      });
+      setNotificationsEnabled(Boolean(savedSettings.notificationsEnabled));
+    } catch (error) {
+      console.warn("Could not load saved settings", error);
+    }
+  }, []);
+
   const hasDailyLogs = Boolean(summary?.recentLogs?.length);
   const safeSummary = summary || {};
+  const recentLogs = Array.isArray(safeSummary.recentLogs) ? safeSummary.recentLogs : [];
+  const sessionLogs = Array.isArray(safeSummary.upcomingSessions) ? safeSummary.upcomingSessions : [];
+  const hasAnyUserData = Boolean(recentLogs.length || assignments.length || sessionLogs.length);
+
+  const showNoData = (value, suffix = "") => {
+    if (value === null || value === undefined || Number.isNaN(value)) return "No data available";
+    return `${value}${suffix}`;
+  };
+
+  const moodTodayValue = (() => {
+    const value = Number(safeSummary.todayLog?.moodRating);
+    return Number.isFinite(value) ? value : null;
+  })();
 
   const quickStats = useMemo(
     () => [
       {
         label: "Stress Index",
-        value: `${safeSummary.stressIndex || 0}`,
-        helper: safeSummary.stressCategory || "Moderate",
+        value: showNoData(safeSummary.stressIndex),
+        helper: safeSummary.stressCategory || "No data available",
       },
       {
         label: "Average Study",
-        value: `${safeSummary.weeklyStats?.avgStudyHours || 0}h`,
+        value: showNoData(safeSummary.weeklyStats?.avgStudyHours, "h"),
         helper: "Per day",
       },
       {
         label: "Average Sleep",
-        value: `${safeSummary.weeklyStats?.avgSleepHours || 0}h`,
+        value: showNoData(safeSummary.weeklyStats?.avgSleepHours, "h"),
         helper: "Per night",
       },
       {
         label: "Screen Time",
-        value: `${safeSummary.weeklyStats?.avgScreenTime || 0}h`,
+        value: showNoData(safeSummary.weeklyStats?.avgScreenTime, "h"),
         helper: "Daily average",
       },
       {
         label: "Exercise",
-        value: `${safeSummary.weeklyStats?.avgExercise || 0}m`,
+        value: showNoData(safeSummary.weeklyStats?.avgExercise, "m"),
         helper: "Daily average",
       },
       {
         label: "Mood Today",
-        value: `${safeSummary.todayLog?.moodRating || 5}/10`,
+        value: moodTodayValue === null ? "No data available" : `${moodTodayValue}/10`,
         helper: "Self rating",
       },
     ],
-    [safeSummary]
+    [safeSummary, moodTodayValue]
   );
 
   const studentContext = {
-    stressLevel: safeSummary.stressIndex || 50,
-    avgSleepHours: safeSummary.weeklyStats?.avgSleepHours || 7,
-    avgStudyHours: safeSummary.weeklyStats?.avgStudyHours || 4,
-    moodRating: safeSummary.todayLog?.moodRating || 5,
+    stressLevel: Number(safeSummary.stressIndex ?? 0),
+    avgSleepHours: Number(safeSummary.weeklyStats?.avgSleepHours ?? 0),
+    avgStudyHours: Number(safeSummary.weeklyStats?.avgStudyHours ?? 0),
+    moodRating: Number(safeSummary.todayLog?.moodRating ?? 0),
     recentActivities: {
-      exercise: safeSummary.todayLog?.exerciseMinutes || 0,
-      screenTime: safeSummary.todayLog?.screenTime || 0,
-      waterIntake: safeSummary.todayLog?.waterIntake || 0,
+      exercise: Number(safeSummary.todayLog?.exerciseMinutes ?? 0),
+      screenTime: Number(safeSummary.todayLog?.screenTime ?? 0),
+      waterIntake: Number(safeSummary.todayLog?.waterIntake ?? 0),
     },
   };
 
   const completedAssignments = assignments.filter((item) => item.status === "completed").length;
-  const assignmentCompletionRate = Math.round(
-    (completedAssignments / Math.max(1, assignments.length || 0)) * 100
-  );
-  const averagePerformance = Math.round(
-    assignments.reduce((total, item) => total + Number(item.progress || 0), 0) /
-      Math.max(1, assignments.length)
-  );
+  const assignmentCompletionRate = assignments.length
+    ? clampPercent((completedAssignments / assignments.length) * 100)
+    : null;
+  const averagePerformance = calculatePerformanceScoreFromTasks(assignments);
 
-  const avgFocusMinutes = Number(safeSummary.weeklyStats?.avgFocusMinutes || 0);
-  const avgBreakMinutes = Number(safeSummary.weeklyStats?.avgBreakMinutes || 0);
-  const focusBalance = Math.round((avgFocusMinutes / Math.max(1, avgFocusMinutes + avgBreakMinutes)) * 100);
+  const avgFocusMinutes = safeSummary.weeklyStats?.avgFocusMinutes;
+  const avgBreakMinutes = safeSummary.weeklyStats?.avgBreakMinutes;
+  const hasFocusData = Number.isFinite(Number(avgFocusMinutes)) && Number.isFinite(Number(avgBreakMinutes));
+  const focusBalance = hasFocusData
+    ? clampPercent((Number(avgFocusMinutes) / Math.max(1, Number(avgFocusMinutes) + Number(avgBreakMinutes))) * 100)
+    : null;
 
-  const wellnessRaw =
-    (Number(safeSummary.weeklyStats?.avgSleepHours || 0) / 8) * 45 +
-    (Number(safeSummary.weeklyStats?.avgExercise || 0) / 45) * 25 +
-    (Number(safeSummary.todayLog?.moodRating || 5) / 10) * 30;
-  const wellnessRhythm = Math.max(0, Math.min(100, Math.round(wellnessRaw)));
+  const wellnessRhythm = calculateWellnessScoreFromMoodLogs(recentLogs);
   const wellnessLabel =
-    wellnessRhythm >= 75 ? "Feeling Good" : wellnessRhythm >= 45 ? "Steady Rhythm" : "Needs Attention";
-  const todayTasks = (safeSummary.upcomingSessions || []).filter((session) => {
+    wellnessRhythm === null
+      ? "No data available"
+      : wellnessRhythm >= 75
+        ? "Feeling Good"
+        : wellnessRhythm >= 45
+          ? "Steady Rhythm"
+          : "Needs Attention";
+  const todayTasks = sessionLogs.filter((session) => {
     const date = new Date(session.scheduledDate);
     if (Number.isNaN(date.getTime())) return false;
     const now = new Date();
@@ -256,23 +419,15 @@ function Dashboard({ onLogout }) {
       date.getDate() === now.getDate()
     );
   });
-  const todayTaskCount = todayTasks.length;
-  const nextUpcomingTasks = (safeSummary.upcomingSessions || [])
+  const todayTaskCount = sessionLogs.length ? todayTasks.length : null;
+  const nextUpcomingTasks = sessionLogs
     .filter((session) => {
       const date = new Date(session.scheduledDate);
       return !Number.isNaN(date.getTime()) && date >= new Date();
     })
     .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate))
     .slice(0, 2);
-  const toDateKey = (value) => {
-    const date = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(date.getTime())) return null;
-    const month = `${date.getMonth() + 1}`.padStart(2, "0");
-    const day = `${date.getDate()}`.padStart(2, "0");
-    return `${date.getFullYear()}-${month}-${day}`;
-  };
   const todayDateKey = toDateKey(new Date());
-  const taskStorageKey = "todayTaskCompletion";
 
   const dashboardThemeStyle = {
     "--theme-bg": theme.bg,
@@ -305,63 +460,28 @@ function Dashboard({ onLogout }) {
     return `${idPart}-${toDateKey(task.scheduledDate) || "date-unknown"}`;
   };
 
-  const activityDateKeys = useMemo(() => {
-    const keys = new Set();
-
-    (safeSummary.recentLogs || []).forEach((log) => {
-      const key = toDateKey(log?.date || log?.logDate);
-      if (key) keys.add(key);
-    });
-
-    return keys;
-  }, [safeSummary.recentLogs]);
-
-  const weekDays = useMemo(() => {
-    const labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-    const today = new Date();
-    const mondayOffset = (today.getDay() + 6) % 7;
-    const monday = new Date(today);
-    monday.setHours(0, 0, 0, 0);
-    monday.setDate(today.getDate() - mondayOffset);
-    const todayKey = toDateKey(today);
-
-    return labels.map((label, index) => {
-      const date = new Date(monday);
-      date.setDate(monday.getDate() + index);
-      const key = toDateKey(date);
-      return {
-        label,
-        key,
-        isActive: key ? activityDateKeys.has(key) : false,
-        isToday: key === todayKey,
-      };
-    });
-  }, [activityDateKeys]);
-
-  const currentStreak = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    let streak = 0;
-    const cursor = new Date(today);
-
-    while (true) {
-      const key = toDateKey(cursor);
-      if (!key || !activityDateKeys.has(key)) break;
-      streak += 1;
-      cursor.setDate(cursor.getDate() - 1);
-    }
-
-    return streak;
-  }, [activityDateKeys]);
-
-  const completedTaskCount = useMemo(
-    () => todayTasks.filter((task) => Boolean(completedTaskMap[buildTaskKey(task)])).length,
-    [todayTasks, completedTaskMap]
+  const activityDateKeys = useMemo(
+    () => collectActivityDateKeys(recentLogs, assignments, sessionLogs),
+    [recentLogs, assignments, sessionLogs]
   );
 
-  const taskProgressPercent = todayTaskCount
-    ? Math.round((completedTaskCount / todayTaskCount) * 100)
-    : 0;
+  const weekDays = useMemo(() => buildWeekDaysFromActivity(activityDateKeys), [activityDateKeys]);
+
+  const currentStreak = useMemo(() => calculateStreakCount(activityDateKeys), [activityDateKeys]);
+
+  const todaysTaskItems = useMemo(
+    () =>
+      todayTasks.map((task) => {
+        const id = buildTaskKey(task);
+        return {
+          id,
+          title: task.subject || "Study session",
+          date: task.scheduledDate,
+          completed: Boolean(completedTaskMap[id]),
+        };
+      }),
+    [todayTasks, completedTaskMap]
+  );
 
   const earnedBadges = useMemo(() => {
     const badgeRules = [
@@ -399,53 +519,154 @@ function Dashboard({ onLogout }) {
   }, [themeName]);
 
   useEffect(() => {
+    localStorage.setItem("dashboardThemeMode", themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
     try {
-      const savedMood = JSON.parse(localStorage.getItem("moodLog") || "{}");
-      if (savedMood?.date === todayDateKey && savedMood?.mood) {
-        setSelectedMood(savedMood.mood);
-        setMoodLockedForToday(true);
-      } else {
-        setSelectedMood(null);
-        setMoodLockedForToday(false);
-      }
+      const moodLogs = loadFromStorage("moodLogs", []);
+      const todayMood = Array.isArray(moodLogs)
+        ? moodLogs.find((entry) => entry?.date === todayDateKey)
+        : null;
+      setTodayMoodLog(todayMood || null);
     } catch (error) {
       console.warn("Could not load moodLog from localStorage", error);
     }
 
     try {
-      const savedTasks = JSON.parse(localStorage.getItem(taskStorageKey) || "{}");
-      if (savedTasks?.date === todayDateKey && savedTasks?.completed) {
-        setCompletedTaskMap(savedTasks.completed);
-      } else {
-        setCompletedTaskMap({});
+      const tasksByDay = loadFromStorage("tasks", {});
+      if (tasksByDay && typeof tasksByDay === "object") {
+        setCompletedTaskMap(tasksByDay[todayDateKey] || {});
+        return;
       }
+
+      setCompletedTaskMap({});
     } catch (error) {
       console.warn("Could not load task completion from localStorage", error);
     }
   }, [todayDateKey]);
 
-  const handleMoodPick = (moodEmoji) => {
-    if (moodLockedForToday) return;
+  const handleMoodPick = (mood) => {
+    if (todayMoodLog) return;
+
+    const existingLogs = loadFromStorage("moodLogs", []);
+    const filteredLogs = Array.isArray(existingLogs)
+      ? existingLogs.filter((entry) => entry?.date !== todayDateKey)
+      : [];
+
     const entry = {
       date: todayDateKey,
-      mood: moodEmoji,
+      emoji: mood.emoji,
+      moodValue: mood.moodValue,
       updatedAt: new Date().toISOString(),
     };
-    localStorage.setItem("moodLog", JSON.stringify(entry));
-    setSelectedMood(moodEmoji);
-    setMoodLockedForToday(true);
+
+    saveToStorage("moodLogs", [...filteredLogs, entry]);
+    setTodayMoodLog(entry);
   };
 
-  const handleTaskToggle = (task, isChecked) => {
-    const key = buildTaskKey(task);
+  const handleTaskToggle = (taskId, isChecked) => {
     setCompletedTaskMap((prev) => {
-      const next = { ...prev, [key]: isChecked };
-      localStorage.setItem(
-        taskStorageKey,
-        JSON.stringify({ date: todayDateKey, completed: next })
-      );
+      const next = { ...prev, [taskId]: isChecked };
+      const allTasks = loadFromStorage("tasks", {});
+      const nextTasks = {
+        ...(allTasks && typeof allTasks === "object" ? allTasks : {}),
+        [todayDateKey]: next,
+      };
+      saveToStorage("tasks", nextTasks);
       return next;
     });
+  };
+
+  const handleSettingsFieldChange = (field, value) => {
+    setSettingsForm((prev) => ({ ...prev, [field]: value }));
+    setSettingsErrors((prev) => ({ ...prev, [field]: undefined }));
+  };
+
+  const handleProfilePictureChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        handleSettingsFieldChange("profilePicture", reader.result);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveSettings = () => {
+    const nextErrors = {};
+    const trimmedUsername = settingsForm.username.trim();
+    const trimmedEmail = settingsForm.email.trim();
+    const trimmedPhone = settingsForm.phone.trim();
+
+    if (!trimmedUsername) nextErrors.username = "Username is required.";
+    if (!trimmedEmail) {
+      nextErrors.email = "Email is required.";
+    } else if (!/^\S+@\S+\.\S+$/.test(trimmedEmail)) {
+      nextErrors.email = "Enter a valid email address.";
+    }
+
+    if (trimmedPhone && !/^\+?[0-9\s\-()]{7,20}$/.test(trimmedPhone)) {
+      nextErrors.phone = "Enter a valid phone number.";
+    }
+
+    setSettingsErrors(nextErrors);
+    if (Object.keys(nextErrors).length) return;
+
+    const payload = {
+      ...settingsForm,
+      username: trimmedUsername,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+      notificationsEnabled,
+      themeMode,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Update user profile in userAuth system
+    const result = updateUserProfile({
+      username: trimmedUsername,
+      email: trimmedEmail,
+      phone: trimmedPhone,
+    });
+
+    if (!result.success) {
+      alert(`Failed to update profile: ${result.error}`);
+      return;
+    }
+
+    saveToStorage("userSettings", payload);
+
+    try {
+      const existingUser = loadFromStorage("user", {});
+      const nextUser = {
+        ...existingUser,
+        name: payload.username,
+        email: payload.email,
+        phone: payload.phone,
+        profilePicture: payload.profilePicture,
+      };
+      saveToStorage("user", nextUser);
+    } catch (error) {
+      console.warn("Could not update user record", error);
+    }
+
+    alert("Settings saved successfully.");
+    setShowSettingsModal(false);
+  };
+
+  const handleChangePassword = (currentPassword, newPassword) => {
+    return changePassword(currentPassword, newPassword);
+  };
+
+  const handleLogoutClick = () => {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    if (onLogout) onLogout();
+    window.location.reload();
   };
 
   const fetchDashboard = async () => {
@@ -627,81 +848,40 @@ function Dashboard({ onLogout }) {
 
   return (
     <div className="dashboard-container" style={dashboardThemeStyle}>
-      <section className="dashboard-top-banner" aria-label="Student dashboard banner">
-        <div className="banner-brand-row">
-          <div className="banner-logo-circle" aria-hidden="true">
-            <span>SW</span>
-          </div>
-          <h1>
-            Student Well-Being <span>&</span> Performance Tracker
-          </h1>
-        </div>
-        <div className="banner-controls">
-          <div className="theme-switcher">
-            <span style={{ color: theme.textMuted }}>Theme</span>
-            <div className="theme-dot-row">
-              {Object.entries(themes).map(([key, item]) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setThemeName(key)}
-                  aria-label={`Switch to ${item.name} theme`}
-                  title={item.name}
-                  style={{
-                    width: key === themeName ? "22px" : "18px",
-                    height: key === themeName ? "22px" : "18px",
-                    borderRadius: "50%",
-                    border: "none",
-                    outline: key === themeName ? "2px solid #ffffff" : "none",
-                    outlineOffset: key === themeName ? "3px" : "0",
-                    background: themeDotColors[key],
-                    cursor: "pointer",
-                    padding: 0,
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-
-          <div className="banner-stats-row">
-            <article className="banner-stat-card">
-              <small>Wellness</small>
-              <strong>{wellnessRhythm}%</strong>
-              <span>Mood score</span>
-            </article>
-            <article className="banner-stat-card">
-              <small>Performance</small>
-              <strong>{assignmentCompletionRate}%</strong>
-              <span>Avg grade</span>
-            </article>
-            <article className="banner-stat-card">
-              <small>Today</small>
-              <strong>{todayTaskCount}</strong>
-              <span>Tasks scheduled</span>
-            </article>
-          </div>
-        </div>
-      </section>
+      <Header
+        theme={theme}
+        themeName={themeName}
+        themes={themes}
+        themeDotColors={themeDotColors}
+        onThemeChange={(key) => {
+          setThemeName(key);
+          setThemeMode("custom");
+        }}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        wellnessScore={wellnessRhythm}
+        performanceScore={assignmentCompletionRate}
+        todayTaskCount={todayTaskCount}
+      />
 
       <section className="dashboard-quick-insights" aria-label="Quick dashboard insights">
         <article className="insight-card-dark">
           <h3>Wellness</h3>
-          <strong>{wellnessRhythm}%</strong>
+          <strong>{wellnessRhythm === null ? "No data available" : `${wellnessRhythm}%`}</strong>
           <p>{wellnessLabel}</p>
         </article>
 
         <article className="insight-card-dark">
           <h3>Performance</h3>
-          <strong>{averagePerformance}%</strong>
+          <strong>{averagePerformance === null ? "No data available" : `${averagePerformance}%`}</strong>
           <div className="insight-progress-track" aria-hidden="true">
-            <div className="insight-progress-fill" style={{ width: `${averagePerformance}%` }} />
+            <div className="insight-progress-fill" style={{ width: `${averagePerformance || 0}%` }} />
           </div>
           <p>Average assignment progress</p>
         </article>
 
         <article className="insight-card-dark">
           <h3>Schedule</h3>
-          <strong>{todayTaskCount} today</strong>
+          <strong>{todayTaskCount === null ? "No data available" : `${todayTaskCount} today`}</strong>
           {nextUpcomingTasks.length ? (
             <ul className="insight-task-list">
               {nextUpcomingTasks.map((task) => (
@@ -712,12 +892,12 @@ function Dashboard({ onLogout }) {
               ))}
             </ul>
           ) : (
-            <p>No upcoming tasks found.</p>
+            <p>{sessionLogs.length ? "No upcoming tasks found." : "No data available"}</p>
           )}
         </article>
       </section>
 
-      <StreakDashboard streakCount={currentStreak} weekDays={weekDays} />
+      <StreakDashboard streakCount={currentStreak} weekDays={weekDays} hasActivityData={hasAnyUserData} />
 
       {earnedBadges.length > 0 && (
         <section className="achievements-card" aria-label="Earned achievements">
@@ -737,69 +917,8 @@ function Dashboard({ onLogout }) {
       )}
 
       <section className="dashboard-dual-widgets" aria-label="Mood log and task checklist">
-        <article className="widget-dark-card quick-mood-widget">
-          <h3>Quick Mood Log</h3>
-          <p>How are you feeling today?</p>
-          <div className="mood-button-row">
-            {moodOptions.map((emoji) => {
-              const isSelected = selectedMood === emoji;
-              return (
-                <button
-                  key={emoji}
-                  type="button"
-                  className={`mood-btn ${isSelected ? "active" : ""}`}
-                  onClick={() => handleMoodPick(emoji)}
-                  disabled={moodLockedForToday && !isSelected}
-                  aria-label={`Log mood ${emoji}`}
-                >
-                  {emoji}
-                </button>
-              );
-            })}
-          </div>
-          {moodLockedForToday && selectedMood && (
-            <small className="widget-footnote">Mood logged for today: {selectedMood}</small>
-          )}
-        </article>
-
-        <article className="widget-dark-card tasks-widget">
-          <h3>Today's Tasks</h3>
-          {todayTasks.length ? (
-            <ul className="task-checklist">
-              {todayTasks.map((task) => {
-                const taskKey = buildTaskKey(task);
-                const checked = Boolean(completedTaskMap[taskKey]);
-                return (
-                  <li key={taskKey}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => handleTaskToggle(task, event.target.checked)}
-                      />
-                      <span>{task.subject || "Study session"}</span>
-                    </label>
-                    <small>
-                      {new Date(task.scheduledDate).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </small>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="tasks-empty">No tasks for today - enjoy your day!</p>
-          )}
-
-          <div className="task-progress-wrap" aria-hidden="true">
-            <div className="task-progress-track">
-              <div className="task-progress-fill" style={{ width: `${taskProgressPercent}%` }} />
-            </div>
-            <span>{completedTaskCount} of {todayTaskCount} tasks done</span>
-          </div>
-        </article>
+        <MoodTracker todayMoodLog={todayMoodLog} onLogMood={handleMoodPick} />
+        <TaskList todaysTasks={todaysTaskItems} onToggleTask={handleTaskToggle} />
       </section>
 
       <section className="student-command-bar glass-card">
@@ -824,12 +943,7 @@ function Dashboard({ onLogout }) {
           </button>
           <button
             className="btn-logout"
-            onClick={() => {
-              localStorage.removeItem("token");
-              localStorage.removeItem("user");
-              if (onLogout) onLogout();
-              window.location.reload();
-            }}
+            onClick={handleLogoutClick}
           >
             Logout
           </button>
@@ -859,23 +973,23 @@ function Dashboard({ onLogout }) {
           <section className="overview-ribbon">
             <article className="ribbon-card">
               <span>Assignment Completion</span>
-              <strong>{assignmentCompletionRate}%</strong>
+              <strong>{assignmentCompletionRate === null ? "No data available" : `${assignmentCompletionRate}%`}</strong>
               <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${assignmentCompletionRate}%` }} />
+                <div className="mini-progress-fill" style={{ width: `${assignmentCompletionRate || 0}%` }} />
               </div>
             </article>
             <article className="ribbon-card">
               <span>Focus Balance</span>
-              <strong>{focusBalance}%</strong>
+              <strong>{focusBalance === null ? "No data available" : `${focusBalance}%`}</strong>
               <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${focusBalance}%` }} />
+                <div className="mini-progress-fill" style={{ width: `${focusBalance || 0}%` }} />
               </div>
             </article>
             <article className="ribbon-card">
               <span>Wellness Rhythm</span>
-              <strong>{wellnessRhythm}%</strong>
+              <strong>{wellnessRhythm === null ? "No data available" : `${wellnessRhythm}%`}</strong>
               <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${wellnessRhythm}%` }} />
+                <div className="mini-progress-fill" style={{ width: `${wellnessRhythm || 0}%` }} />
               </div>
             </article>
           </section>
@@ -1210,6 +1324,27 @@ function Dashboard({ onLogout }) {
           <AIChatbot studentContext={studentContext} />
         </section>
       )}
+
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        settings={settingsForm}
+        validationErrors={settingsErrors}
+        onFieldChange={handleSettingsFieldChange}
+        onProfilePictureChange={handleProfilePictureChange}
+        themeMode={themeMode === "custom" ? "system" : themeMode}
+        onThemeModeChange={(value) => {
+          setThemeMode(value);
+          if (value === "light" || value === "dark") {
+            setThemeName(value);
+          }
+        }}
+        notificationsEnabled={notificationsEnabled}
+        onNotificationToggle={setNotificationsEnabled}
+        onSave={handleSaveSettings}
+        onChangePassword={handleChangePassword}
+        onLogout={handleLogoutClick}
+      />
     </div>
   );
 }
