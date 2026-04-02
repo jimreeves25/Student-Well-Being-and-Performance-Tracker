@@ -67,7 +67,7 @@ export default function Signup({ initialAccountType = "student", onSignupSuccess
   };
 
   return (
-    <div className={`container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
+    <div className={`auth-container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
       <div className="card">
         <h1 className="title">Join Skillspring</h1>
         <p className="subtitle">Create your {accountType === "parent" ? "Parent" : "Student"} account</p>

@@ -1,35 +1,47 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createAssignment,
-  getAssignments,
+  changePasswordAPI,
   getDashboardSummary,
   getParentLinkRequests,
   generateParentLinkCode,
-  createStudySession,
   respondToParentLinkRequest,
   saveDailyLog,
   updateWellnessPrivacy,
 } from "../services/api";
-import AIChatbot from "../components/AIChatbot";
-import SmartScheduler from "../components/SmartScheduler";
+import AiCoach from "../components/AiCoach";
 import DashboardCharts from "../components/DashboardCharts";
 import LiveFaceStudySession from "../components/sample/LiveFaceStudySession";
 import Header from "../components/dashboard/Header";
 import MoodTracker from "../components/dashboard/MoodTracker";
 import TaskList from "../components/dashboard/TaskList";
-import SettingsModal from "../components/settings/SettingsModal";
-import { loadFromStorage, saveToStorage } from "../utils/storage";
-import { changePassword, updateUserProfile, initializeUserAuth } from "../utils/userAuth";
+import DashboardGrid from "../components/layout/DashboardGrid";
+import StatsCard from "../components/ui/StatsCard";
+import AssignmentPlanner from "../components/assignments/AssignmentPlanner";
+import { useAssignments } from "../hooks/useAssignments";
+import {
+  clearAllNotifications,
+  getInAppNotifications,
+  markAllRead,
+  requestNotificationPermission,
+  saveInAppNotification,
+  sendBrowserNotification,
+} from "../utils/notificationService";
+import { loadFromStorage, saveToStorage, setUserData } from "../utils/storage";
+import { updateUserProfile, initializeUserAuth } from "../utils/userAuth";
 import "../styles/Dashboard.css";
 
 const VIEWS = [
   { id: "overview", label: "Overview" },
+  { id: "analytics", label: "Analytics" },
+  { id: "rewards", label: "Rewards" },
   { id: "daily-log", label: "Daily Log" },
   { id: "assignments", label: "Assignments" },
   { id: "sessions", label: "Live Session" },
-  { id: "parent-link", label: "Parent Link" },
   { id: "ai-tools", label: "AI Tools" },
+  { id: "settings", label: "Settings" },
 ];
+
+const SETTINGS_NOTIFICATION_PREFS_KEY = "settingsNotificationPrefs";
 
 const themes = {
   dark: {
@@ -195,6 +207,182 @@ const calculateStreakCount = (activityKeys) => {
   return streak;
 };
 
+const calculateXP = (recentLogs, assignments, currentStreak, moodLogs) => {
+  console.log("XP Inputs:", {
+    logs: recentLogs?.length,
+    assignments: assignments?.length,
+    streak: currentStreak,
+    moodLogs: moodLogs?.length,
+  });
+
+  let xp = 0;
+
+  (recentLogs || []).forEach((log) => {
+    xp += 50;
+    if (Number(log?.waterIntake) >= 3) xp += 10;
+    if (Number(log?.exerciseMinutes) >= 30) xp += 15;
+    if (Number(log?.sleepHours) >= 7) xp += 10;
+    if (Number(log?.studyHours) >= 6) xp += 20;
+  });
+
+  (assignments || []).forEach((assignment) => {
+    if (assignment?.status === "completed") xp += 30;
+  });
+
+  (moodLogs || []).forEach(() => {
+    xp += 10;
+  });
+
+  xp += Number(currentStreak || 0) * 25;
+
+  return xp;
+};
+
+const getLevel = (xp) => {
+  if (xp >= 3000) return { name: "Legend", next: null, current: 3000, max: 3000 };
+  if (xp >= 1500) return { name: "Wellness Pro", next: "Legend", current: 1500, max: 3000 };
+  if (xp >= 500) return { name: "Scholar", next: "Wellness Pro", current: 500, max: 1500 };
+  return { name: "Beginner", next: "Scholar", current: 0, max: 500 };
+};
+
+const calculateBadges = (recentLogs, assignments, currentStreak, moodLogs, totalXP) => {
+  const badges = [];
+  const logs = recentLogs || [];
+
+  if (logs.length >= 1) {
+    badges.push({
+      id: "first_log",
+      icon: "📝",
+      title: "First Step",
+      desc: "Logged your first day",
+      earned: true,
+    });
+  }
+
+  if (currentStreak >= 7) {
+    badges.push({
+      id: "streak_7",
+      icon: "🔥",
+      title: "Week Warrior",
+      desc: "7 day streak",
+      earned: true,
+    });
+  }
+
+  if (currentStreak >= 14) {
+    badges.push({
+      id: "streak_14",
+      icon: "⚡",
+      title: "Fortnight Force",
+      desc: "14 day streak",
+      earned: true,
+    });
+  }
+
+  if (currentStreak >= 30) {
+    badges.push({
+      id: "streak_30",
+      icon: "👑",
+      title: "Monthly Legend",
+      desc: "30 day streak",
+      earned: true,
+    });
+  }
+
+  if (logs.some((log) => Number(log?.studyHours) >= 6)) {
+    badges.push({
+      id: "study_beast",
+      icon: "📚",
+      title: "Study Beast",
+      desc: "Studied 6+ hours in a day",
+      earned: true,
+    });
+  }
+
+  if (logs.filter((log) => Number(log?.waterIntake) >= 3).length >= 5) {
+    badges.push({
+      id: "hydrated",
+      icon: "💧",
+      title: "Hydration Hero",
+      desc: "Drank 3L water 5 days",
+      earned: true,
+    });
+  }
+
+  if (logs.some((log) => Number(log?.sleepHours) >= 8 && log?.sleepQuality === "Excellent")) {
+    badges.push({
+      id: "sleep_king",
+      icon: "😴",
+      title: "Sleep Champion",
+      desc: "8h excellent sleep",
+      earned: true,
+    });
+  }
+
+  if (logs.filter((log) => Number(log?.exerciseMinutes) >= 30).length >= 7) {
+    badges.push({
+      id: "fitness",
+      icon: "💪",
+      title: "Fitness Freak",
+      desc: "Exercised 7 days",
+      earned: true,
+    });
+  }
+
+  if ((assignments || []).filter((assignment) => assignment?.status === "completed").length >= 5) {
+    badges.push({
+      id: "assignments",
+      icon: "✅",
+      title: "Assignment Ace",
+      desc: "Completed 5 assignments",
+      earned: true,
+    });
+  }
+
+  if (totalXP >= 500) {
+    badges.push({
+      id: "scholar",
+      icon: "🎓",
+      title: "Scholar",
+      desc: "Reached 500 XP",
+      earned: true,
+    });
+  }
+
+  if (totalXP >= 1500) {
+    badges.push({
+      id: "wellness_pro",
+      icon: "🌟",
+      title: "Wellness Pro",
+      desc: "Reached 1500 XP",
+      earned: true,
+    });
+  }
+
+  if (totalXP >= 3000) {
+    badges.push({
+      id: "legend",
+      icon: "🏆",
+      title: "Legend",
+      desc: "Reached 3000 XP",
+      earned: true,
+    });
+  }
+
+  return badges;
+};
+const formatTimeAgo = (timestamp) => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "just now";
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.max(1, Math.floor(diffMs / 60000));
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+};
+
 const StreakDashboard = ({ streakCount, weekDays, hasActivityData }) => (
   <section className="streak-dashboard-card" aria-label="Streak dashboard">
     <h3>Streak Dashboard</h3>
@@ -224,6 +412,493 @@ const StreakDashboard = ({ streakCount, weekDays, hasActivityData }) => (
   </section>
 );
 
+const getPasswordStrength = (value) => {
+  const password = value || "";
+  let score = 0;
+
+  if (password.length >= 8) score += 1;
+  if (password.length >= 12) score += 1;
+  if (/[A-Z]/.test(password) && /[a-z]/.test(password)) score += 1;
+  if (/\d/.test(password)) score += 1;
+  if (/[^A-Za-z0-9]/.test(password)) score += 1;
+
+  if (!password.length || score <= 2) {
+    return { label: "Weak", width: "34%", color: "#ef4444" };
+  }
+  if (score <= 4) {
+    return { label: "Fair", width: "67%", color: "#f59e0b" };
+  }
+  return { label: "Strong", width: "100%", color: "#22c55e" };
+};
+
+function SettingsView({
+  settings,
+  validationErrors,
+  onFieldChange,
+  onProfilePictureChange,
+  onSave,
+  onChangePassword,
+  onThemeCardSelect,
+  themeMode,
+  onThemeModeChange,
+  activeThemeName,
+  notificationsEnabled,
+  onNotificationToggle,
+  notificationPrefs,
+  onNotificationPrefToggle,
+  parentCode,
+  parentRequests,
+  allowWellnessShare,
+  onGenerateParentCode,
+  onRespondParentRequest,
+  onWellnessShareToggle,
+  onBackToDashboard,
+  onLogout,
+}) {
+  const [activeSection, setActiveSection] = useState("profile");
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordMessage, setPasswordMessage] = useState(null);
+  const [showPassword, setShowPassword] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirmPassword: false,
+  });
+  const fileInputRef = useRef(null);
+
+  const userName = settings.username?.trim() || "Student";
+  const userEmail = settings.email?.trim() || "student@example.com";
+
+  const initials = useMemo(() => {
+    const parts = (userName || userEmail)
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2);
+    if (!parts.length) return "ST";
+    return parts.map((part) => part[0]?.toUpperCase() || "").join("").slice(0, 2);
+  }, [userName, userEmail]);
+
+  const passwordStrength = useMemo(() => getPasswordStrength(passwordForm.newPassword), [passwordForm.newPassword]);
+
+  const handlePasswordUpdate = async () => {
+    setPasswordMessage(null);
+
+    if (!passwordForm.currentPassword.trim()) {
+      setPasswordMessage({ type: "error", text: "Current password is required." });
+      return;
+    }
+
+    if (!passwordForm.newPassword.trim()) {
+      setPasswordMessage({ type: "error", text: "New password is required." });
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      setPasswordMessage({ type: "error", text: "Passwords do not match." });
+      return;
+    }
+
+    const result = await onChangePassword(passwordForm.currentPassword, passwordForm.newPassword);
+    if (result.success) {
+      setPasswordMessage({ type: "success", text: "Password changed successfully!" });
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setTimeout(() => setPasswordMessage(null), 3000);
+      return;
+    }
+
+    setPasswordMessage({ type: "error", text: result.error || "Failed to change password." });
+  };
+
+  const renderEyeButton = (field) => (
+    <button
+      type="button"
+      className="settings-eye-btn"
+      onClick={() => setShowPassword((prev) => ({ ...prev, [field]: !prev[field] }))}
+      aria-label={showPassword[field] ? "Hide password" : "Show password"}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 5c-5.2 0-9.5 3.3-11 7 1.5 3.7 5.8 7 11 7s9.5-3.3 11-7c-1.5-3.7-5.8-7-11-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-2.2A1.8 1.8 0 1 0 12 10a1.8 1.8 0 0 0 0 3.8z" />
+      </svg>
+    </button>
+  );
+
+  return (
+    <section className="settings-page-shell" aria-label="Settings page">
+      <h1 className="settings-page-title">Settings</h1>
+
+      <div className="settings-page-layout">
+        <aside className="settings-page-sidebar">
+          <button type="button" className="settings-back-btn" onClick={onBackToDashboard}>
+            ← Dashboard
+          </button>
+
+          <div className="settings-sidebar-group">
+            <small>Account</small>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "profile" ? "active" : ""}`}
+              onClick={() => setActiveSection("profile")}
+            >
+              Profile
+            </button>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "security" ? "active" : ""}`}
+              onClick={() => setActiveSection("security")}
+            >
+              Security
+            </button>
+          </div>
+
+          <div className="settings-sidebar-group">
+            <small>App Settings</small>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "preferences" ? "active" : ""}`}
+              onClick={() => setActiveSection("preferences")}
+            >
+              Preferences
+            </button>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "notifications" ? "active" : ""}`}
+              onClick={() => setActiveSection("notifications")}
+            >
+              Notifications
+            </button>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "parent-controls" ? "active" : ""}`}
+              onClick={() => setActiveSection("parent-controls")}
+            >
+              Parent Controls
+            </button>
+          </div>
+
+          <div className="settings-sidebar-group">
+            <small>Danger</small>
+            <button
+              type="button"
+              className={`settings-side-item ${activeSection === "danger" ? "active" : ""}`}
+              onClick={() => setActiveSection("danger")}
+            >
+              Logout
+            </button>
+          </div>
+        </aside>
+
+        <div className="settings-page-content">
+          {activeSection === "profile" && (
+            <article className="settings-content-card">
+              <h2>Profile</h2>
+              <p>Update your personal information and profile photo.</p>
+
+              <div className="settings-profile-hero">
+                {settings.profilePicture ? (
+                  <img src={settings.profilePicture} alt="Profile" className="settings-profile-avatar" />
+                ) : (
+                  <div className="settings-profile-avatar settings-avatar-fallback">{initials}</div>
+                )}
+                <button type="button" className="settings-card-btn" onClick={() => fileInputRef.current?.click()}>
+                  Change Photo
+                </button>
+                <input
+                  ref={fileInputRef}
+                  id="settings-profile-picture"
+                  type="file"
+                  accept="image/*"
+                  onChange={onProfilePictureChange}
+                  style={{ display: "none" }}
+                />
+              </div>
+
+              <div className="settings-card-grid">
+                <label className="settings-card-field">
+                  <span>Username</span>
+                  <input value={settings.username} onChange={(event) => onFieldChange("username", event.target.value)} />
+                  {validationErrors.username ? <small>{validationErrors.username}</small> : null}
+                </label>
+
+                <label className="settings-card-field">
+                  <span>Email</span>
+                  <input type="email" value={settings.email} onChange={(event) => onFieldChange("email", event.target.value)} />
+                  {validationErrors.email ? <small>{validationErrors.email}</small> : null}
+                </label>
+
+                <label className="settings-card-field settings-card-field-full">
+                  <span>Phone</span>
+                  <input value={settings.phone} onChange={(event) => onFieldChange("phone", event.target.value)} />
+                  {validationErrors.phone ? <small>{validationErrors.phone}</small> : null}
+                </label>
+              </div>
+
+              <div className="settings-card-actions">
+                <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onSave}>
+                  Save
+                </button>
+              </div>
+            </article>
+          )}
+
+          {activeSection === "security" && (
+            <article className="settings-content-card">
+              <h2>Security</h2>
+              <p>Manage your password and keep your account protected.</p>
+
+              <label className="settings-card-field settings-card-field-full">
+                <span>Current Password</span>
+                <div className="settings-password-input-wrap">
+                  <input
+                    type={showPassword.currentPassword ? "text" : "password"}
+                    value={passwordForm.currentPassword}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, currentPassword: event.target.value }))}
+                  />
+                  {renderEyeButton("currentPassword")}
+                </div>
+              </label>
+
+              <label className="settings-card-field settings-card-field-full">
+                <span>New Password</span>
+                <div className="settings-password-input-wrap">
+                  <input
+                    type={showPassword.newPassword ? "text" : "password"}
+                    value={passwordForm.newPassword}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, newPassword: event.target.value }))}
+                  />
+                  {renderEyeButton("newPassword")}
+                </div>
+              </label>
+
+              <div className="settings-password-strength">
+                <div className="settings-password-strength-track">
+                  <div
+                    className="settings-password-strength-fill"
+                    style={{ width: passwordStrength.width, background: passwordStrength.color }}
+                  />
+                </div>
+                <small style={{ color: passwordStrength.color }}>{passwordStrength.label}</small>
+              </div>
+
+              <label className="settings-card-field settings-card-field-full">
+                <span>Confirm Password</span>
+                <div className="settings-password-input-wrap">
+                  <input
+                    type={showPassword.confirmPassword ? "text" : "password"}
+                    value={passwordForm.confirmPassword}
+                    onChange={(event) => setPasswordForm((prev) => ({ ...prev, confirmPassword: event.target.value }))}
+                  />
+                  {renderEyeButton("confirmPassword")}
+                </div>
+              </label>
+
+              <div className="settings-card-actions">
+                <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={handlePasswordUpdate}>
+                  Change Password
+                </button>
+              </div>
+
+              {passwordMessage ? (
+                <p className={`settings-inline-message ${passwordMessage.type === "error" ? "error" : "success"}`}>
+                  {passwordMessage.text}
+                </p>
+              ) : null}
+            </article>
+          )}
+
+          {activeSection === "preferences" && (
+            <article className="settings-content-card">
+              <h2>Preferences</h2>
+              <p>Customize the dashboard appearance and behavior.</p>
+
+              <div className="settings-theme-card-grid">
+                {Object.entries(themes).map(([themeKey, themeValues]) => (
+                  <button
+                    key={themeKey}
+                    type="button"
+                    className={`settings-theme-card ${activeThemeName === themeKey ? "active" : ""}`}
+                    onClick={() => onThemeCardSelect(themeKey)}
+                  >
+                    <strong>{themeValues.name}</strong>
+                    <div className="settings-theme-card-swatches">
+                      <span style={{ background: themeValues.bg }} />
+                      <span style={{ background: themeValues.card }} />
+                      <span style={{ background: themeValues.accent }} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              <div className="settings-toggle-row-full">
+                <div>
+                  <strong>System Theme</strong>
+                  <p>Automatically match your operating system theme.</p>
+                </div>
+                <button
+                  type="button"
+                  className={`settings-pill-toggle ${themeMode === "system" ? "on" : ""}`}
+                  onClick={() => onThemeModeChange(themeMode === "system" ? "dark" : "system")}
+                  aria-pressed={themeMode === "system"}
+                >
+                  <span />
+                </button>
+              </div>
+            </article>
+          )}
+
+          {activeSection === "notifications" && (
+            <article className="settings-content-card">
+              <h2>Notifications</h2>
+              <p>Choose what alerts and summaries you receive.</p>
+
+              <div className="settings-toggle-list">
+                <div className="settings-toggle-row-full">
+                  <div>
+                    <strong>Streak reminders</strong>
+                    <p>Remind me to log daily.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`settings-pill-toggle ${notificationPrefs.streakReminders ? "on" : ""}`}
+                    onClick={() => onNotificationPrefToggle("streakReminders")}
+                    aria-pressed={notificationPrefs.streakReminders}
+                  >
+                    <span />
+                  </button>
+                </div>
+
+                <div className="settings-toggle-row-full">
+                  <div>
+                    <strong>Weekly summary</strong>
+                    <p>Get a weekly wellness report.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`settings-pill-toggle ${notificationPrefs.weeklySummary ? "on" : ""}`}
+                    onClick={() => onNotificationPrefToggle("weeklySummary")}
+                    aria-pressed={notificationPrefs.weeklySummary}
+                  >
+                    <span />
+                  </button>
+                </div>
+
+                <div className="settings-toggle-row-full">
+                  <div>
+                    <strong>Achievement alerts</strong>
+                    <p>Notify when badge earned.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`settings-pill-toggle ${notificationPrefs.achievementAlerts ? "on" : ""}`}
+                    onClick={() => onNotificationPrefToggle("achievementAlerts")}
+                    aria-pressed={notificationPrefs.achievementAlerts}
+                  >
+                    <span />
+                  </button>
+                </div>
+
+                <div className="settings-toggle-row-full">
+                  <div>
+                    <strong>Account notifications</strong>
+                    <p>General account updates and reminders.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`settings-pill-toggle ${notificationsEnabled ? "on" : ""}`}
+                    onClick={() => onNotificationToggle(!notificationsEnabled)}
+                    aria-pressed={notificationsEnabled}
+                  >
+                    <span />
+                  </button>
+                </div>
+              </div>
+            </article>
+          )}
+
+          {activeSection === "parent-controls" && (
+            <article className="settings-content-card">
+              <h2>Parent Access Controls</h2>
+              <p>Manage account linking and wellness sharing permissions.</p>
+
+              <div className="settings-toggle-row-full">
+                <div>
+                  <strong>Verification Code</strong>
+                  <p>
+                    {parentCode?.verificationCode
+                      ? `${parentCode.verificationCode} (expires ${new Date(parentCode.expiresAt).toLocaleTimeString()})`
+                      : "Generate a code to link a parent account."}
+                  </p>
+                </div>
+                <button type="button" className="settings-card-btn" onClick={onGenerateParentCode}>
+                  Generate Code
+                </button>
+              </div>
+
+              <div className="settings-toggle-row-full">
+                <div>
+                  <strong>Wellness Privacy</strong>
+                  <p>Share detailed wellness indicators with approved parent.</p>
+                </div>
+                <button
+                  type="button"
+                  className={`settings-pill-toggle ${allowWellnessShare ? "on" : ""}`}
+                  onClick={() => onWellnessShareToggle(!allowWellnessShare)}
+                  aria-pressed={allowWellnessShare}
+                >
+                  <span />
+                </button>
+              </div>
+
+              <div className="sessions-card">
+                <h3>Pending Parent Requests</h3>
+                {parentRequests.length ? (
+                  <ul>
+                    {parentRequests.map((request) => (
+                      <li key={request.id}>
+                        <div>
+                          <strong>{request.parent?.name || "Unknown Parent"}</strong>
+                          <div className="session-meta">{request.parent?.email}</div>
+                        </div>
+                        <div className="inline-actions">
+                          <button type="button" className="btn-primary" onClick={() => onRespondParentRequest(request.id, "approved")}>Approve</button>
+                          <button type="button" className="btn-logout" onClick={() => onRespondParentRequest(request.id, "rejected")}>Reject</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="sessions-empty">No pending parent requests.</p>
+                )}
+              </div>
+            </article>
+          )}
+
+          {activeSection === "danger" && (
+            <article className="settings-content-card">
+              <h2>Logout</h2>
+              <p>Sign out and manage sensitive account actions.</p>
+
+              <div className="settings-card-actions">
+                <button type="button" className="settings-card-btn" onClick={onLogout}>
+                  Logout
+                </button>
+              </div>
+
+              <section className="settings-danger-card">
+                <strong>Danger Zone</strong>
+                <p>This action is permanent and cannot be undone.</p>
+                <button type="button" className="settings-danger-action-btn">Delete Account</button>
+              </section>
+            </article>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function Dashboard({ onLogout }) {
   const [themeName, setThemeName] = useState(() => {
     const savedTheme = localStorage.getItem("dashboardTheme") || "dark";
@@ -245,18 +920,27 @@ function Dashboard({ onLogout }) {
         : themeName;
   const theme = themes[effectiveThemeName] || themes.dark;
   const [summary, setSummary] = useState(null);
-  const [assignments, setAssignments] = useState([]);
+  const assignmentPlanner = useAssignments();
+  const assignments = assignmentPlanner.rawAssignments;
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeView, setActiveView] = useState("overview");
   const [showLogForm, setShowLogForm] = useState(false);
-  const [showAssignmentForm, setShowAssignmentForm] = useState(false);
   const [parentCode, setParentCode] = useState(null);
   const [parentRequests, setParentRequests] = useState([]);
   const [allowWellnessShare, setAllowWellnessShare] = useState(true);
   const [todayMoodLog, setTodayMoodLog] = useState(null);
+  const [moodLogsAll, setMoodLogsAll] = useState(() => {
+    try {
+      const data = loadFromStorage("moodLogs", []);
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  });
+  const [notifications, setNotifications] = useState(() => getInAppNotifications());
+  const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
   const [completedTaskMap, setCompletedTaskMap] = useState({});
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [settingsErrors, setSettingsErrors] = useState({});
   const [settingsForm, setSettingsForm] = useState({
     username: "",
@@ -265,6 +949,11 @@ function Dashboard({ onLogout }) {
     profilePicture: "",
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [settingsNotificationPrefs, setSettingsNotificationPrefs] = useState({
+    streakReminders: true,
+    weeklySummary: true,
+    achievementAlerts: true,
+  });
 
   const [logForm, setLogForm] = useState({
     studyHours: 0,
@@ -282,18 +971,9 @@ function Dashboard({ onLogout }) {
     notes: "",
   });
 
-  const [assignmentForm, setAssignmentForm] = useState({
-    title: "",
-    subject: "",
-    dueDate: "",
-    status: "pending",
-    progress: 0,
-  });
-
   useEffect(() => {
     fetchDashboard();
     fetchParentRequests();
-    fetchAssignments();
   }, []);
 
   useEffect(() => {
@@ -318,15 +998,36 @@ function Dashboard({ onLogout }) {
         profilePicture: savedSettings.profilePicture || savedUser.profilePicture || "",
       });
       setNotificationsEnabled(Boolean(savedSettings.notificationsEnabled));
+
+      const savedNotificationPrefs = loadFromStorage(SETTINGS_NOTIFICATION_PREFS_KEY, null);
+      if (savedNotificationPrefs && typeof savedNotificationPrefs === "object") {
+        setSettingsNotificationPrefs((prev) => ({ ...prev, ...savedNotificationPrefs }));
+      }
     } catch (error) {
       console.warn("Could not load saved settings", error);
     }
   }, []);
 
-  const hasDailyLogs = Boolean(summary?.recentLogs?.length);
-  const safeSummary = summary || {};
-  const recentLogs = Array.isArray(safeSummary.recentLogs) ? safeSummary.recentLogs : [];
-  const sessionLogs = Array.isArray(safeSummary.upcomingSessions) ? safeSummary.upcomingSessions : [];
+  useEffect(() => {
+    saveToStorage(SETTINGS_NOTIFICATION_PREFS_KEY, settingsNotificationPrefs);
+  }, [settingsNotificationPrefs]);
+
+  useEffect(() => {
+    if (!loading) {
+      setUserData({ performance: assignmentPlanner.analytics.completionRate || 0 });
+    }
+  }, [assignmentPlanner.analytics.completionRate, loading]);
+
+  const safeSummary = useMemo(() => summary || {}, [summary]);
+  const recentLogs = useMemo(
+    () => (Array.isArray(safeSummary.recentLogs) ? safeSummary.recentLogs : []),
+    [safeSummary]
+  );
+  const sessionLogs = useMemo(
+    () => (Array.isArray(safeSummary.upcomingSessions) ? safeSummary.upcomingSessions : []),
+    [safeSummary]
+  );
+  const hasDailyLogs = Boolean(recentLogs.length);
   const hasAnyUserData = Boolean(recentLogs.length || assignments.length || sessionLogs.length);
 
   const showNoData = (value, suffix = "") => {
@@ -387,10 +1088,6 @@ function Dashboard({ onLogout }) {
     },
   };
 
-  const completedAssignments = assignments.filter((item) => item.status === "completed").length;
-  const assignmentCompletionRate = assignments.length
-    ? clampPercent((completedAssignments / assignments.length) * 100)
-    : null;
   const averagePerformance = calculatePerformanceScoreFromTasks(assignments);
 
   const avgFocusMinutes = safeSummary.weeklyStats?.avgFocusMinutes;
@@ -428,6 +1125,11 @@ function Dashboard({ onLogout }) {
     .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate))
     .slice(0, 2);
   const todayDateKey = toDateKey(new Date());
+
+  const sleepHoursToday = Number(safeSummary.todayLog?.sleepHours || 0);
+  const waterIntakeToday = Number(safeSummary.todayLog?.waterIntake || 0);
+  const sleepGoalPercent = Math.max(0, Math.min(100, Math.round((sleepHoursToday / 8) * 100)));
+  const waterGoalPercent = Math.max(0, Math.min(100, Math.round((waterIntakeToday / 3) * 100)));
 
   const dashboardThemeStyle = {
     "--theme-bg": theme.bg,
@@ -469,6 +1171,147 @@ function Dashboard({ onLogout }) {
 
   const currentStreak = useMemo(() => calculateStreakCount(activityDateKeys), [activityDateKeys]);
 
+  const totalXP = useMemo(
+    () => calculateXP(recentLogs, assignments, currentStreak, moodLogsAll),
+    [recentLogs, assignments, currentStreak, moodLogsAll]
+  );
+
+  const level = useMemo(() => getLevel(totalXP), [totalXP]);
+
+  const rewardsBadges = useMemo(
+    () => calculateBadges(recentLogs, assignments, currentStreak, moodLogsAll, totalXP),
+    [recentLogs, assignments, currentStreak, moodLogsAll, totalXP]
+  );
+
+  const xpFromDailyLogs = useMemo(() => (recentLogs?.length || 0) * 50, [recentLogs]);
+  const xpFromAssignments = useMemo(
+    () => (assignments || []).filter((assignment) => assignment?.status === "completed").length * 30,
+    [assignments]
+  );
+  const xpFromStreak = useMemo(() => Number(currentStreak || 0) * 25, [currentStreak]);
+  const xpFromMoodLogs = useMemo(() => (moodLogsAll?.length || 0) * 10, [moodLogsAll]);
+
+  const xpProgress = useMemo(() => {
+    const range = level.max - level.current;
+    if (range <= 0) return 100;
+    const progress = totalXP - level.current;
+    return Math.min(100, Math.max(0, Math.round((progress / range) * 100)));
+  }, [totalXP, level]);
+
+  const xpRewardItems = [
+    { id: "daily_data", icon: "📝", label: "Log daily data", value: "+50 XP" },
+    { id: "mood_log", icon: "🙂", label: "Log your mood", value: "+10 XP" },
+    { id: "complete_task", icon: "✅", label: "Complete a task", value: "+15 XP" },
+    { id: "streak", icon: "🔥", label: "Maintain your streak", value: "+25 XP/day" },
+    { id: "assignment", icon: "📚", label: "Complete assignment", value: "+30 XP" },
+    { id: "sleep", icon: "😴", label: "Healthy sleep (7h+)", value: "+10 XP" },
+    { id: "exercise", icon: "💪", label: "Exercise 30min+", value: "+15 XP" },
+    { id: "water", icon: "💧", label: "Drink 3L water", value: "+10 XP" },
+  ];
+
+  const unreadCount = notifications.filter((notification) => !notification.read).length;
+
+  const notificationPanelRef = useRef(null);
+
+  useEffect(() => {
+    requestNotificationPermission();
+
+    const checkNotifications = () => {
+      const now = new Date();
+      const todayKey = toDateKey(now);
+
+      (safeSummary.upcomingSessions || []).forEach((session) => {
+        const sessionTime = new Date(session.scheduledDate);
+        const diffMinutes = (sessionTime - now) / 60000;
+
+        if (diffMinutes > 0 && diffMinutes <= 15) {
+          const notifKey = `session_soon_${session.id}`;
+          if (!localStorage.getItem(notifKey)) {
+            const title = "Study Session Starting Soon!";
+            const body = `${session.subject} starts in ${Math.round(diffMinutes)} minutes`;
+            sendBrowserNotification(title, body);
+            saveInAppNotification(title, body, "warning");
+            localStorage.setItem(notifKey, "1");
+          }
+        }
+
+        if (sessionTime < now && !session.completed) {
+          const notifKey = `session_missed_${session.id}_${todayKey}`;
+          if (!localStorage.getItem(notifKey)) {
+            const title = "Missed Study Session";
+            const body = `You missed your ${session.subject} session scheduled at ${sessionTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+            sendBrowserNotification(title, body);
+            saveInAppNotification(title, body, "danger");
+            localStorage.setItem(notifKey, "1");
+          }
+        }
+      });
+
+      const hour = now.getHours();
+      if (hour >= 19) {
+        const hasLoggedToday = (safeSummary.recentLogs || []).some((log) =>
+          toDateKey(log.date || log.createdAt) === todayKey
+        );
+        const logReminderKey = `log_reminder_${todayKey}`;
+        if (!hasLoggedToday && !localStorage.getItem(logReminderKey)) {
+          const title = "Don't forget your daily log!";
+          const body = "You haven't logged today yet. Keep your streak alive!";
+          sendBrowserNotification(title, body);
+          saveInAppNotification(title, body, "info");
+          localStorage.setItem(logReminderKey, "1");
+        }
+      }
+
+      if (hour >= 22 && currentStreak > 0) {
+        const streakKey = `streak_warning_${todayKey}`;
+        const hasLoggedToday = (safeSummary.recentLogs || []).some((log) =>
+          toDateKey(log.date || log.createdAt) === todayKey
+        );
+        if (!hasLoggedToday && !localStorage.getItem(streakKey)) {
+          const title = "🔥 Streak at Risk!";
+          const body = `Your ${currentStreak} day streak will reset if you don't log today!`;
+          sendBrowserNotification(title, body);
+          saveInAppNotification(title, body, "danger");
+          localStorage.setItem(streakKey, "1");
+        }
+      }
+
+      (assignments || []).forEach((assignment) => {
+        if (!assignment.dueDate || assignment.status === "completed") return;
+        const dueTime = new Date(assignment.dueDate);
+        const diffHours = (dueTime - now) / 3600000;
+
+        if (diffHours > 0 && diffHours <= 24) {
+          const notifKey = `assignment_due_${assignment.id}_${todayKey}`;
+          if (!localStorage.getItem(notifKey)) {
+            const title = "Assignment Due Soon!";
+            const body = `"${assignment.title}" is due in ${Math.round(diffHours)} hours`;
+            sendBrowserNotification(title, body);
+            saveInAppNotification(title, body, "warning");
+            localStorage.setItem(notifKey, "1");
+          }
+        }
+      });
+
+      setNotifications(getInAppNotifications());
+    };
+
+    checkNotifications();
+    const interval = setInterval(checkNotifications, 60000);
+    return () => clearInterval(interval);
+  }, [safeSummary, assignments, currentStreak]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (notificationPanelRef.current && !notificationPanelRef.current.contains(event.target)) {
+        setIsNotificationPanelOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const todaysTaskItems = useMemo(
     () =>
       todayTasks.map((task) => {
@@ -482,37 +1325,6 @@ function Dashboard({ onLogout }) {
       }),
     [todayTasks, completedTaskMap]
   );
-
-  const earnedBadges = useMemo(() => {
-    const badgeRules = [
-      {
-        min: 7,
-        title: "7 Day Streak",
-        subtitle: "Logged in 7 days in a row!",
-        icon: "★",
-      },
-      {
-        min: 14,
-        title: "14 Day Streak",
-        subtitle: "Logged in 14 days in a row!",
-        icon: "★",
-      },
-      {
-        min: 21,
-        title: "21 Day Streak",
-        subtitle: "Logged in 21 days in a row!",
-        icon: "★",
-      },
-      {
-        min: 30,
-        title: "Perfect Month",
-        subtitle: "Logged in 30 days in a row!",
-        icon: "🏆",
-      },
-    ];
-
-    return badgeRules.filter((badge) => currentStreak >= badge.min);
-  }, [currentStreak]);
 
   useEffect(() => {
     localStorage.setItem("dashboardTheme", themeName);
@@ -546,6 +1358,15 @@ function Dashboard({ onLogout }) {
     }
   }, [todayDateKey]);
 
+  useEffect(() => {
+    try {
+      const data = loadFromStorage("moodLogs", []);
+      setMoodLogsAll(Array.isArray(data) ? data : []);
+    } catch {
+      setMoodLogsAll([]);
+    }
+  }, [todayMoodLog]);
+
   const handleMoodPick = (mood) => {
     if (todayMoodLog) return;
 
@@ -562,6 +1383,7 @@ function Dashboard({ onLogout }) {
     };
 
     saveToStorage("moodLogs", [...filteredLogs, entry]);
+    setUserData({ mood: Math.round((Number(mood.moodValue) || 0) * 20) });
     setTodayMoodLog(entry);
   };
 
@@ -655,11 +1477,16 @@ function Dashboard({ onLogout }) {
     }
 
     alert("Settings saved successfully.");
-    setShowSettingsModal(false);
+    setActiveView("overview");
   };
 
-  const handleChangePassword = (currentPassword, newPassword) => {
-    return changePassword(currentPassword, newPassword);
+  const handleChangePassword = async (currentPassword, newPassword) => {
+    try {
+      await changePasswordAPI(currentPassword, newPassword);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
   };
 
   const handleLogoutClick = () => {
@@ -689,19 +1516,10 @@ function Dashboard({ onLogout }) {
     }
   };
 
-  const fetchAssignments = async () => {
-    try {
-      const data = await getAssignments();
-      setAssignments(data || []);
-    } catch (error) {
-      console.error("Error fetching assignments:", error);
-    }
-  };
-
   const handleRefreshAll = async () => {
     setIsRefreshing(true);
     try {
-      await Promise.allSettled([fetchDashboard(), fetchParentRequests(), fetchAssignments()]);
+      await Promise.allSettled([fetchDashboard(), fetchParentRequests(), Promise.resolve(assignmentPlanner.refreshAssignments())]);
     } finally {
       setIsRefreshing(false);
     }
@@ -710,11 +1528,6 @@ function Dashboard({ onLogout }) {
   const handleLogChange = (e) => {
     const { name, value } = e.target;
     setLogForm({ ...logForm, [name]: value });
-  };
-
-  const handleAssignmentChange = (e) => {
-    const { name, value } = e.target;
-    setAssignmentForm({ ...assignmentForm, [name]: value });
   };
 
   const handleGenerateParentCode = async () => {
@@ -747,43 +1560,19 @@ function Dashboard({ onLogout }) {
     }
   };
 
-  const handleScheduleCreated = async (scheduleData) => {
-    try {
-      const studySessions = scheduleData.filter((b) => b.type === "study");
-      let savedCount = 0;
-      const errors = [];
-
-      for (const block of studySessions) {
-        try {
-          const sessionData = {
-            subject: block.subject,
-            scheduledDate: block.scheduledDate || block.startTime,
-            duration: block.duration,
-            notes: block.reason || "AI-generated study session",
-          };
-          await createStudySession(sessionData);
-          savedCount += 1;
-        } catch (sessionError) {
-          errors.push(sessionError.message || "Unknown error");
-        }
-      }
-
-      if (savedCount > 0) {
-        alert(`Successfully scheduled ${savedCount} study session(s)!`);
-        fetchDashboard();
-      } else {
-        alert(`Error saving sessions: ${errors.join(", ")}`);
-      }
-    } catch (error) {
-      console.error("Error in schedule creation:", error);
-      alert("Error saving sessions. Please try again.");
-    }
-  };
-
   const handleLogSubmit = async (e) => {
     e.preventDefault();
     try {
       await saveDailyLog(logForm);
+      const totalStudyMinutes = Math.max(
+        0,
+        Math.round((Number(logForm.studyHours) || 0) * 60) + (Number(logForm.focusMinutes) || 0)
+      );
+      const moodPercent = Math.max(0, Math.min(100, (Number(logForm.moodRating) || 0) * 10));
+      setUserData({
+        studyTime: totalStudyMinutes,
+        mood: moodPercent,
+      });
       alert("Daily log saved successfully!");
       setShowLogForm(false);
       fetchDashboard();
@@ -808,42 +1597,20 @@ function Dashboard({ onLogout }) {
     }
   };
 
-  const handleAssignmentSubmit = async (e) => {
-    e.preventDefault();
-
-    if (!assignmentForm.title.trim()) {
-      alert("Assignment title is required.");
-      return;
-    }
-
-    try {
-      await createAssignment({
-        title: assignmentForm.title.trim(),
-        subject: assignmentForm.subject.trim() || "General",
-        dueDate: assignmentForm.dueDate || null,
-        status: assignmentForm.status,
-        progress: Number(assignmentForm.progress || 0),
-      });
-
-      alert("Assignment saved successfully!");
-      setAssignmentForm({
-        title: "",
-        subject: "",
-        dueDate: "",
-        status: "pending",
-        progress: 0,
-      });
-      setShowAssignmentForm(false);
-      fetchAssignments();
-      fetchDashboard();
-    } catch (error) {
-      console.error("Error saving assignment:", error);
-      alert("Error saving assignment: " + error.message);
-    }
-  };
 
   if (loading) {
-    return <div className="loading">Loading dashboard...</div>;
+    return (
+      <div className="dashboard-container dashboard-skeleton-shell" style={dashboardThemeStyle}>
+        <div className="dashboard-skeleton-bar" />
+        <div className="dashboard-skeleton-grid">
+          <div className="dashboard-skeleton-card" />
+          <div className="dashboard-skeleton-card" />
+          <div className="dashboard-skeleton-card" />
+          <div className="dashboard-skeleton-card dashboard-skeleton-card-wide" />
+          <div className="dashboard-skeleton-card dashboard-skeleton-card-wide" />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -857,183 +1624,268 @@ function Dashboard({ onLogout }) {
           setThemeName(key);
           setThemeMode("custom");
         }}
-        onOpenSettings={() => setShowSettingsModal(true)}
-        wellnessScore={wellnessRhythm}
-        performanceScore={assignmentCompletionRate}
-        todayTaskCount={todayTaskCount}
+        summary={summary}
+        loading={loading}
       />
 
-      <section className="dashboard-quick-insights" aria-label="Quick dashboard insights">
-        <article className="insight-card-dark">
-          <h3>Wellness</h3>
-          <strong>{wellnessRhythm === null ? "No data available" : `${wellnessRhythm}%`}</strong>
-          <p>{wellnessLabel}</p>
-        </article>
-
-        <article className="insight-card-dark">
-          <h3>Performance</h3>
-          <strong>{averagePerformance === null ? "No data available" : `${averagePerformance}%`}</strong>
-          <div className="insight-progress-track" aria-hidden="true">
-            <div className="insight-progress-fill" style={{ width: `${averagePerformance || 0}%` }} />
-          </div>
-          <p>Average assignment progress</p>
-        </article>
-
-        <article className="insight-card-dark">
-          <h3>Schedule</h3>
-          <strong>{todayTaskCount === null ? "No data available" : `${todayTaskCount} today`}</strong>
-          {nextUpcomingTasks.length ? (
-            <ul className="insight-task-list">
-              {nextUpcomingTasks.map((task) => (
-                <li key={task.id || task._id || task.scheduledDate}>
-                  <span>{task.subject || "Study session"}</span>
-                  <small>{new Date(task.scheduledDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>{sessionLogs.length ? "No upcoming tasks found." : "No data available"}</p>
-          )}
-        </article>
-      </section>
-
-      <StreakDashboard streakCount={currentStreak} weekDays={weekDays} hasActivityData={hasAnyUserData} />
-
-      {earnedBadges.length > 0 && (
-        <section className="achievements-card" aria-label="Earned achievements">
-          <h3>Achievements</h3>
-          <div className="achievements-row">
-            {earnedBadges.map((badge) => (
-              <article className="achievement-item" key={badge.title}>
-                <div className="achievement-icon" aria-hidden="true">
-                  <span>{badge.icon}</span>
-                </div>
-                <strong>{badge.title}</strong>
-                <p>{badge.subtitle}</p>
-              </article>
-            ))}
-          </div>
-        </section>
+      {activeView === "settings" && (
+        <SettingsView
+          settings={settingsForm}
+          validationErrors={settingsErrors}
+          onFieldChange={handleSettingsFieldChange}
+          onProfilePictureChange={handleProfilePictureChange}
+          onSave={handleSaveSettings}
+          onChangePassword={handleChangePassword}
+          onThemeCardSelect={(value) => {
+            setThemeName(value);
+            setThemeMode("custom");
+          }}
+          themeMode={themeMode}
+          onThemeModeChange={(value) => {
+            setThemeMode(value);
+            if (value === "light" || value === "dark") {
+              setThemeName(value);
+            }
+          }}
+          activeThemeName={themeName}
+          notificationsEnabled={notificationsEnabled}
+          onNotificationToggle={setNotificationsEnabled}
+          notificationPrefs={settingsNotificationPrefs}
+          onNotificationPrefToggle={(key) =>
+            setSettingsNotificationPrefs((prev) => ({ ...prev, [key]: !prev[key] }))
+          }
+          parentCode={parentCode}
+          parentRequests={parentRequests}
+          allowWellnessShare={allowWellnessShare}
+          onGenerateParentCode={handleGenerateParentCode}
+          onRespondParentRequest={handleRespondParentRequest}
+          onWellnessShareToggle={handleWellnessShareToggle}
+          onBackToDashboard={() => setActiveView("overview")}
+          onLogout={handleLogoutClick}
+        />
       )}
 
-      <section className="dashboard-dual-widgets" aria-label="Mood log and task checklist">
-        <MoodTracker todayMoodLog={todayMoodLog} onLogMood={handleMoodPick} />
-        <TaskList todaysTasks={todaysTaskItems} onToggleTask={handleTaskToggle} />
-      </section>
+      {activeView !== "settings" && (
+        <DashboardGrid
+          sidebar={
+            <>
+              <div className="dashboard-left-brand">
+                <strong>Student Wellness</strong>
+                <span>Realtime analytics workspace</span>
+              </div>
+              <nav className="dashboard-left-nav" aria-label="Primary dashboard navigation">
+                <button className={`left-nav-item ${activeView === "overview" ? "active" : ""}`} onClick={() => setActiveView("overview")}>Dashboard</button>
+                <button className={`left-nav-item ${activeView === "analytics" ? "active" : ""}`} onClick={() => setActiveView("analytics")}>Analytics</button>
+                <button className={`left-nav-item ${activeView === "rewards" ? "active" : ""}`} onClick={() => setActiveView("rewards")}>Rewards</button>
+                <button className={`left-nav-item ${activeView === "sessions" ? "active" : ""}`} onClick={() => setActiveView("sessions")}>Study Sessions</button>
+                <button className={`left-nav-item ${activeView === "settings" ? "active" : ""}`} onClick={() => setActiveView("settings")}>Settings</button>
+              </nav>
+              <div className="left-nav-utility">
+                <button className="btn-primary" onClick={() => { setActiveView("daily-log"); setShowLogForm(true); }}>
+                  + Log Today
+                </button>
+                <button className="btn-secondary" onClick={handleRefreshAll} disabled={isRefreshing}>
+                  {isRefreshing ? "Refreshing..." : "Refresh Data"}
+                </button>
+              </div>
+            </>
+          }
+          topbar={
+            <>
+              <div className="dashboard-topbar-user">
+                <div className="dashboard-avatar-chip">{(settingsForm.username || "ST").slice(0, 2).toUpperCase()}</div>
+                <div>
+                  <h1>Welcome back, {settingsForm.username || "Student"}</h1>
+                  <p>Track wellness, performance, and study momentum in one place.</p>
+                </div>
+              </div>
+              <div className="dashboard-topbar-actions">
+                <div className="xp-header-indicator" aria-label="XP progress">
+                  <div className="xp-header-meta">
+                    <span className="xp-header-level">{level.name}</span>
+                    <span className="xp-header-value">{totalXP} XP</span>
+                  </div>
+                  <div className="xp-header-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={xpProgress}>
+                    <div className="xp-header-fill" style={{ width: `${xpProgress}%` }} />
+                  </div>
+                </div>
+                <StatsCard label="Wellness" value={wellnessRhythm === null ? "--" : `${wellnessRhythm}%`} helper={wellnessLabel} tone="wellness" />
+                <StatsCard label="Performance" value={averagePerformance === null ? "--" : `${averagePerformance}%`} helper="Assignments" tone="progress" />
+                <StatsCard label="Today" value={todayTaskCount === null ? "--" : `${todayTaskCount}`} helper="Upcoming sessions" tone="default" />
+                <div className="notification-shell" ref={notificationPanelRef}>
+                  <button
+                    type="button"
+                    className="notification-bell-btn"
+                    onClick={() => setIsNotificationPanelOpen((prev) => !prev)}
+                    aria-label="Open notifications"
+                  >
+                    <span className="notification-bell-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24">
+                        <path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm8-6V11a8 8 0 1 0-16 0v5l-2 2v1h20v-1l-2-2Zm-2 1H6v-6a6 6 0 1 1 12 0v6Z" />
+                      </svg>
+                    </span>
+                    {unreadCount > 0 && <span className="notification-badge">{unreadCount}</span>}
+                  </button>
 
-      <section className="student-command-bar glass-card">
-        <div className="command-bar-copy">
-          <h2>Command Center</h2>
-          <p>Use smart shortcuts to move through your daily workflow faster.</p>
-        </div>
-        <div className="command-bar-actions">
-          <button
-            className="btn-analytics"
-            onClick={() => {
-              if (hasDailyLogs) window.location.hash = "#analytics";
-            }}
-            disabled={!hasDailyLogs}
-            aria-disabled={!hasDailyLogs}
-            title={hasDailyLogs ? "View your analytics" : "Add a daily log to unlock analytics"}
-          >
-            Open Analytics
-          </button>
-          <button className="btn-secondary" onClick={handleRefreshAll} disabled={isRefreshing}>
-            {isRefreshing ? "Refreshing..." : "Refresh"}
-          </button>
-          <button
-            className="btn-logout"
-            onClick={handleLogoutClick}
-          >
-            Logout
-          </button>
-          <button className="btn-primary" onClick={() => { setActiveView("daily-log"); setShowLogForm(true); }}>
-            Log Today
-          </button>
-          <button className="btn-secondary" onClick={() => setActiveView("sessions")}>Open Live Hub</button>
-          <button className="btn-secondary" onClick={() => setActiveView("assignments")}>Track Assignments</button>
-          <button className="btn-secondary" onClick={() => setActiveView("parent-link")}>Parent Access</button>
-        </div>
-      </section>
+                  {isNotificationPanelOpen && (
+                    <div className="notification-dropdown" role="dialog" aria-label="Notifications">
+                      <div className="notification-dropdown-header">
+                        <strong>Notifications</strong>
+                        <button type="button" className="notification-panel-close" onClick={() => setIsNotificationPanelOpen(false)}>
+                          ✕
+                        </button>
+                      </div>
 
-      <section className="workspace-tabs" aria-label="Feature navigation">
-        {VIEWS.map((view) => (
-          <button
-            key={view.id}
-            className={`workspace-tab ${activeView === view.id ? "active" : ""}`}
-            onClick={() => setActiveView(view.id)}
-          >
-            {view.label}
-          </button>
-        ))}
-      </section>
+                      <div className="notification-list">
+                        {notifications.length ? (
+                          notifications.map((notification) => (
+                            <article key={notification.id} className={`notification-item ${notification.read ? "read" : "unread"}`}>
+                              <span className={`notification-dot type-${notification.type}`} aria-hidden="true" />
+                              <div className="notification-copy">
+                                <div className="notification-title-row">
+                                  <strong>{notification.title}</strong>
+                                  <span>{formatTimeAgo(notification.createdAt)}</span>
+                                </div>
+                                <p>{notification.body}</p>
+                              </div>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="notification-empty">No notifications yet.</p>
+                        )}
+                      </div>
+
+                      <div className="notification-actions">
+                        <button type="button" onClick={() => setNotifications(markAllRead())}>
+                          Mark all read
+                        </button>
+                        <button type="button" onClick={() => setNotifications(clearAllNotifications())}>
+                          Clear all
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <button type="button" className="dashboard-notify-chip" onClick={() => setActiveView("settings")}>⚙️ Settings</button>
+              </div>
+            </>
+          }
+          rightPanel={
+            <>
+              <section className="panel-card">
+                <h3>Real-time Widgets</h3>
+                <MoodTracker todayMoodLog={todayMoodLog} onLogMood={handleMoodPick} />
+              </section>
+              <section className="panel-card">
+                <TaskList todaysTasks={todaysTaskItems} onToggleTask={handleTaskToggle} />
+              </section>
+              <section className="panel-card quick-actions-panel">
+                <h3>Quick Actions</h3>
+                <button className="quick-action-icon-btn" onClick={() => setActiveView("assignments")}>📚 Assignments</button>
+                <button className="quick-action-icon-btn" onClick={() => setActiveView("sessions")}>🎥 Study Hub</button>
+                <button className="quick-action-icon-btn" onClick={() => setActiveView("ai-tools")}>🤖 AI Coach</button>
+                <button className="quick-action-icon-btn danger" onClick={handleLogoutClick}>↩ Logout</button>
+              </section>
+            </>
+          }
+          main={
+            <>
+              <section className="workspace-tabs" aria-label="Feature navigation">
+                {VIEWS.map((view) => (
+                  <button
+                    key={view.id}
+                    className={`workspace-tab ${activeView === view.id ? "active" : ""}`}
+                    onClick={() => setActiveView(view.id)}
+                  >
+                    {view.label}
+                  </button>
+                ))}
+              </section>
 
       {activeView === "overview" && (
         <>
-          <section className="overview-ribbon">
-            <article className="ribbon-card">
-              <span>Assignment Completion</span>
-              <strong>{assignmentCompletionRate === null ? "No data available" : `${assignmentCompletionRate}%`}</strong>
-              <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${assignmentCompletionRate || 0}%` }} />
-              </div>
-            </article>
-            <article className="ribbon-card">
-              <span>Focus Balance</span>
-              <strong>{focusBalance === null ? "No data available" : `${focusBalance}%`}</strong>
-              <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${focusBalance || 0}%` }} />
-              </div>
-            </article>
-            <article className="ribbon-card">
-              <span>Wellness Rhythm</span>
-              <strong>{wellnessRhythm === null ? "No data available" : `${wellnessRhythm}%`}</strong>
-              <div className="mini-progress-track" aria-hidden="true">
-                <div className="mini-progress-fill" style={{ width: `${wellnessRhythm || 0}%` }} />
-              </div>
-            </article>
-          </section>
-
-          <section className="quick-stats-grid">
-            {quickStats.map((item) => (
-              <article className="quick-stat-card" key={item.label}>
-                <span>{item.label}</span>
-                <strong>{item.value}</strong>
-                <small>{item.helper}</small>
-              </article>
-            ))}
-          </section>
+          <StreakDashboard streakCount={currentStreak} weekDays={weekDays} hasActivityData={hasAnyUserData} />
 
           {safeSummary.todayLog && (
-            <section className="today-card glass-card">
+            <section className="glass-card overview-glance-card" aria-label="Today at a glance">
               <h2>Today at a Glance</h2>
-              <div className="today-stats">
-                <div>
-                  <strong>Study</strong>
-                  <span>{safeSummary.todayLog.studyHours}h</span>
-                </div>
-                <div>
-                  <strong>Sleep</strong>
-                  <span>{safeSummary.todayLog.sleepHours}h ({safeSummary.todayLog.sleepQuality})</span>
-                </div>
-                <div>
-                  <strong>Exercise</strong>
-                  <span>{safeSummary.todayLog.exerciseMinutes}min</span>
-                </div>
-                <div>
-                  <strong>Water</strong>
-                  <span>{safeSummary.todayLog.waterIntake}L</span>
-                </div>
-                <div>
-                  <strong>Mood</strong>
-                  <span>{safeSummary.todayLog.moodRating}/10</span>
-                </div>
-              </div>
+              <p>
+                Study: {Number(safeSummary.todayLog.studyHours || 0)}h | Sleep: {Number(safeSummary.todayLog.sleepHours || 0)}h | Exercise: {Number(safeSummary.todayLog.exerciseMinutes || 0)}min | Water: {Number(safeSummary.todayLog.waterIntake || 0)}L | Mood: {Number(safeSummary.todayLog.moodRating || 0)}/10
+              </p>
             </section>
           )}
 
-          <section className="glass-card">
-            <h2>Performance Panels</h2>
+          <section className="overview-quick-links" aria-label="Quick links">
+            <button className="quick-link-pill" onClick={() => { setActiveView("daily-log"); setShowLogForm(true); }}>
+              Log Today
+            </button>
+            <button className="quick-link-pill" onClick={() => setActiveView("analytics")}>
+              View Analytics
+            </button>
+            <button className="quick-link-pill" onClick={() => setActiveView("assignments")}>
+              Assignments
+            </button>
+            <button className="quick-link-pill" onClick={() => setActiveView("ai-tools")}>
+              AI Coach
+            </button>
+          </section>
+
+          <section className="dashboard-hero-section">
+            <div className="dashboard-hero-copy dashboard-wellness-snapshot">
+              <h2>Today's Wellness Snapshot</h2>
+              <p>Prioritized metrics from your current day and weekly rhythm.</p>
+              <div className="dashboard-hero-metrics dashboard-wellness-grid">
+                <StatsCard label="Stress Index" value={showNoData(safeSummary.stressIndex)} helper={safeSummary.stressCategory || "No data"} tone="wellness" />
+                <StatsCard label="Mood" value={moodTodayValue === null ? "--" : `${moodTodayValue}/10`} helper="Current check-in" tone="default" />
+                <StatsCard label="Focus Balance" value={focusBalance === null ? "--" : `${focusBalance}%`} helper="Focus vs breaks" tone="progress" />
+                <StatsCard label="Sleep Goal" value={`${sleepGoalPercent}%`} helper={`${sleepHoursToday}h of 8h`} tone="default" />
+                <StatsCard label="Water Intake" value={`${waterGoalPercent}%`} helper={`${waterIntakeToday}L of 3L`} tone="wellness" />
+              </div>
+            </div>
+          </section>
+
+          <section className="dashboard-tertiary-grid">
+            <article className="glass-card recommendations-card">
+              <h2>Recommendations</h2>
+              {safeSummary.recommendations?.length > 0 ? (
+                <ul>
+                  {safeSummary.recommendations.slice(0, 3).map((rec, index) => (
+                    <li key={`recommend-${index}`}>{rec}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p>No recommendations yet. Keep logging to get personalized guidance.</p>
+              )}
+            </article>
+            <article className="glass-card overview-earned-badges">
+              <h2>Earned Badges</h2>
+              {rewardsBadges.length ? (
+                <div className="overview-badge-icons">
+                  {rewardsBadges.map((badge) => (
+                    <span key={badge.id} title={badge.title} aria-label={badge.title}>{badge.icon}</span>
+                  ))}
+                </div>
+              ) : (
+                <p>No badges earned yet.</p>
+              )}
+            </article>
+          </section>
+        </>
+      )}
+
+      {activeView === "analytics" && (
+        <section className="glass-card feature-section">
+          <div className="feature-head">
+            <div>
+              <h2>Analytics Workspace</h2>
+              <p>Explore trend intelligence for stress, sleep, focus, and screen time.</p>
+            </div>
+            <button className="btn-secondary" onClick={() => setActiveView("overview")}>
+              ← Overview
+            </button>
+          </div>
+          <section className="glass-card dashboard-trends-block">
+            <h2>Weekly Trends</h2>
             <DashboardCharts
               summary={safeSummary}
               hasDailyLogs={hasDailyLogs}
@@ -1044,17 +1896,87 @@ function Dashboard({ onLogout }) {
             />
           </section>
 
-          {safeSummary.recommendations?.length > 0 && (
-            <section className="recommendations-card glass-card">
-              <h2>Recommendations</h2>
-              <ul>
-                {safeSummary.recommendations.map((rec, index) => (
-                  <li key={`recommend-${index}`}>{rec}</li>
+          <section className="glass-card analytics-upcoming-sessions">
+            <h2>Upcoming Sessions</h2>
+            {nextUpcomingTasks.length ? (
+              <ul className="insight-task-list">
+                {nextUpcomingTasks.map((task) => (
+                  <li key={task.id || task._id || task.scheduledDate}>
+                    <span>{task.subject || "Study session"}</span>
+                    <small>{new Date(task.scheduledDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
+                  </li>
                 ))}
               </ul>
-            </section>
-          )}
-        </>
+            ) : (
+              <p>No upcoming sessions scheduled.</p>
+            )}
+          </section>
+        </section>
+      )}
+
+      {activeView === "rewards" && (
+        <section className="glass-card feature-section rewards-page">
+          <article className="rewards-level-card">
+            <div className="rewards-level-head">
+              <h2>{level.name}</h2>
+              <strong>{totalXP} XP</strong>
+            </div>
+            <div className="rewards-xp-progress-wrap">
+              <div className="rewards-xp-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={xpProgress}>
+                <div className="rewards-xp-progress-fill" style={{ width: `${xpProgress}%` }} />
+              </div>
+              <p>
+                {level.next
+                  ? `${Math.max(0, level.max - totalXP)} XP to ${level.next}`
+                  : "Max level reached"}
+              </p>
+            </div>
+          </article>
+
+          <article className="rewards-xp-breakdown">
+            <h3>XP Breakdown</h3>
+            <ul>
+              <li>From daily logs: {xpFromDailyLogs} XP ({recentLogs.length} x 50)</li>
+              <li>From assignments: {xpFromAssignments} XP</li>
+              <li>From streak: {xpFromStreak} XP ({currentStreak} x 25)</li>
+              <li>From mood logs: {xpFromMoodLogs} XP ({moodLogsAll.length} x 10)</li>
+              <li><strong>Total: {totalXP} XP</strong></li>
+            </ul>
+          </article>
+
+          <article className="rewards-badge-wall">
+            <h3>Your Badges</h3>
+            {rewardsBadges.length ? (
+              <div className="rewards-badges-grid">
+                {rewardsBadges.map((badge) => (
+                  <div key={badge.id} className="rewards-badge-card">
+                    <span className="rewards-badge-icon" aria-hidden="true">{badge.icon}</span>
+                    <strong>{badge.title}</strong>
+                    <p>{badge.desc}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rewards-empty-state">
+                <div className="rewards-empty-illustration" aria-hidden="true" />
+                <p>No badges yet - start logging to earn your first!</p>
+              </div>
+            )}
+          </article>
+
+          <article className="rewards-xp-guide">
+            <h3>How to earn XP</h3>
+            <div className="rewards-xp-grid">
+              {xpRewardItems.map((item) => (
+                <div key={item.id} className="rewards-xp-item">
+                  <span className="rewards-xp-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="rewards-xp-text">{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
+            </div>
+          </article>
+        </section>
       )}
 
       {activeView === "daily-log" && (
@@ -1153,72 +2075,7 @@ function Dashboard({ onLogout }) {
 
       {activeView === "assignments" && (
         <section className="glass-card feature-section">
-          <div className="feature-head">
-            <div>
-              <h2>Assignment Planner</h2>
-              <p>Track every assignment with status and progress.</p>
-            </div>
-            <button onClick={() => setShowAssignmentForm((prev) => !prev)} className="btn-primary">
-              {showAssignmentForm ? "Hide Form" : "Add Assignment"}
-            </button>
-          </div>
-
-          {showAssignmentForm && (
-            <div className="form-card">
-              <form onSubmit={handleAssignmentSubmit}>
-                <div className="form-grid">
-                  <div className="form-group">
-                    <label>Title</label>
-                    <input type="text" name="title" value={assignmentForm.title} onChange={handleAssignmentChange} placeholder="Assignment title" />
-                  </div>
-                  <div className="form-group">
-                    <label>Subject</label>
-                    <input type="text" name="subject" value={assignmentForm.subject} onChange={handleAssignmentChange} placeholder="e.g., IoT, Math" />
-                  </div>
-                  <div className="form-group">
-                    <label>Due Date</label>
-                    <input type="datetime-local" name="dueDate" value={assignmentForm.dueDate} onChange={handleAssignmentChange} />
-                  </div>
-                  <div className="form-group">
-                    <label>Status</label>
-                    <select name="status" value={assignmentForm.status} onChange={handleAssignmentChange}>
-                      <option value="pending">Pending</option>
-                      <option value="in_progress">In Progress</option>
-                      <option value="completed">Completed</option>
-                    </select>
-                  </div>
-                  <div className="form-group">
-                    <label>Progress (%)</label>
-                    <input type="number" name="progress" value={assignmentForm.progress} onChange={handleAssignmentChange} min="0" max="100" />
-                  </div>
-                </div>
-                <button type="submit" className="btn-submit">Save Assignment</button>
-              </form>
-            </div>
-          )}
-
-          <div className="sessions-card">
-            <h3>Tracked Assignments</h3>
-            {assignments.length ? (
-              <ul>
-                {assignments.map((assignment) => (
-                  <li key={assignment.id} className="assignment-item">
-                    <div>
-                      <strong>{assignment.title}</strong>
-                      <div className="session-meta">{assignment.subject || "General"}</div>
-                      {assignment.dueDate && <div className="session-date">Due {new Date(assignment.dueDate).toLocaleString()}</div>}
-                    </div>
-                    <div className="assignment-meta">
-                      <span className={`assignment-status assignment-${assignment.status}`}>{assignment.status.replace("_", " ")}</span>
-                      <span>{assignment.progress}%</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="sessions-empty">No assignments tracked yet.</p>
-            )}
-          </div>
+          <AssignmentPlanner {...assignmentPlanner} />
         </section>
       )}
 
@@ -1229,7 +2086,6 @@ function Dashboard({ onLogout }) {
               <h2>Live Session Hub</h2>
               <p>Schedule, monitor, and review your study sessions.</p>
             </div>
-            <SmartScheduler studentContext={studentContext} onScheduleCreated={handleScheduleCreated} />
           </div>
 
           <div className="sessions-card">
@@ -1261,90 +2117,22 @@ function Dashboard({ onLogout }) {
         </section>
       )}
 
-      {activeView === "parent-link" && (
-        <section className="glass-card feature-section">
-          <div className="feature-head">
-            <div>
-              <h2>Parent Access Controls</h2>
-              <p>Manage account linking and wellness sharing permissions.</p>
-            </div>
-            <button className="btn-secondary" onClick={handleGenerateParentCode}>Generate Code</button>
-          </div>
-
-          <div className="today-stats">
-            <div>
-              <strong>Verification Code</strong>
-              {parentCode?.verificationCode ? (
-                <span>{parentCode.verificationCode} (expires {new Date(parentCode.expiresAt).toLocaleTimeString()})</span>
-              ) : (
-                <span>Generate a code to link a parent account.</span>
-              )}
-            </div>
-            <div>
-              <strong>Wellness Privacy</strong>
-              <label className="privacy-toggle">
-                <input type="checkbox" checked={allowWellnessShare} onChange={(e) => handleWellnessShareToggle(e.target.checked)} />
-                Share detailed wellness indicators with approved parent
-              </label>
-            </div>
-          </div>
-
-          <div className="sessions-card">
-            <h3>Pending Parent Requests</h3>
-            {parentRequests.length ? (
-              <ul>
-                {parentRequests.map((request) => (
-                  <li key={request.id}>
-                    <div>
-                      <strong>{request.parent?.name || "Unknown Parent"}</strong>
-                      <div className="session-meta">{request.parent?.email}</div>
-                    </div>
-                    <div className="inline-actions">
-                      <button className="btn-primary" onClick={() => handleRespondParentRequest(request.id, "approved")}>Approve</button>
-                      <button className="btn-logout" onClick={() => handleRespondParentRequest(request.id, "rejected")}>Reject</button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="sessions-empty">No pending parent requests.</p>
-            )}
-          </div>
-        </section>
-      )}
-
       {activeView === "ai-tools" && (
         <section className="glass-card feature-section">
           <div className="feature-head">
             <div>
               <h2>AI Assistant Space</h2>
-              <p>Chat with AI and request personalized support tips.</p>
+              <p>Switch modes and chat with your AI study coach in real time.</p>
             </div>
           </div>
-          <AIChatbot studentContext={studentContext} />
+
+          <AiCoach />
         </section>
       )}
-
-      <SettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        settings={settingsForm}
-        validationErrors={settingsErrors}
-        onFieldChange={handleSettingsFieldChange}
-        onProfilePictureChange={handleProfilePictureChange}
-        themeMode={themeMode === "custom" ? "system" : themeMode}
-        onThemeModeChange={(value) => {
-          setThemeMode(value);
-          if (value === "light" || value === "dark") {
-            setThemeName(value);
+            </>
           }
-        }}
-        notificationsEnabled={notificationsEnabled}
-        onNotificationToggle={setNotificationsEnabled}
-        onSave={handleSaveSettings}
-        onChangePassword={handleChangePassword}
-        onLogout={handleLogoutClick}
-      />
+        />
+      )}
     </div>
   );
 }

@@ -3,6 +3,8 @@
 }
 
 .app-shell {
+  display: flex;
+  justify-content: flex-start;
   width: 100%;
   min-height: 100vh;
   background: #121820;
@@ -11,6 +13,8 @@
 }
 
 .app-main-content {
+  display: flex;
+  justify-content: flex-start;
   width: 100%;
 }
 

@@ -42,7 +42,7 @@ function Login({ initialAccountType = "student", onLoginSuccess, onGoToSignup })
   };
 
   return (
-    <div className={`container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
+    <div className={`auth-container ${accountType === "parent" ? "parent-mode" : "student-mode"}`}>
       <div className="card">
         <h1 className="title">Skillspring</h1>
         <p className="subtitle">

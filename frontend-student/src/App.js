@@ -4,6 +4,8 @@ import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import Analytics from "./pages/Analytics";
 import ParentDashboard from "./pages/ParentDashboard";
+import AIChatbot from "./components/AIChatbot";
+import ErrorBoundary from "./components/ErrorBoundary";
 import { getDashboardSummary } from "./services/api";
 import "./App.css";
 
@@ -120,7 +122,10 @@ function App() {
 
   return (
     <div className="app-shell">
-      <main className="app-main-content">{pageContent}</main>
+        <ErrorBoundary>
+          <main className="app-main-content">{pageContent}</main>
+        </ErrorBoundary>
+      <AIChatbot />
     </div>
   );
 }

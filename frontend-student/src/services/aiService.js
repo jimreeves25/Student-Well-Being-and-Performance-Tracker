@@ -1,12 +1,8 @@
-const OPENROUTER_API_KEY = (process.env.REACT_APP_OPENROUTER_API_KEY || "").trim();
-const OPENROUTER_MODEL = process.env.REACT_APP_OPENROUTER_MODEL || "meta-llama/llama-3.1-8b-instruct:free";
-const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
-
-const hasUsableApiKey = Boolean(
-  OPENROUTER_API_KEY
-  && !OPENROUTER_API_KEY.includes("PASTE")
-  && !OPENROUTER_API_KEY.includes("YOUR_")
-);
+const BACKEND_CHAT_URL =
+  process.env.REACT_APP_CHAT_API_URL?.trim() ||
+  (window.location.hostname === "localhost"
+    ? "http://localhost:3001/api/chat"
+    : "/api/chat");
 
 const classifyIntent = (message = "") => {
   const text = String(message).toLowerCase();
@@ -19,6 +15,9 @@ const classifyIntent = (message = "") => {
 };
 
 const buildStudentProfile = (context = {}) => {
+  // Handle null or undefined context
+  context = context || {};
+  
   const stressLevel = Number(context.stressLevel || 50);
   const avgSleepHours = Number(context.avgSleepHours || 7);
   const avgStudyHours = Number(context.avgStudyHours || 4);
@@ -95,16 +94,10 @@ const generateRuleBasedChatReply = (message, context = {}, history = []) => {
 
 // AI Chatbot Service
 export const sendChatMessage = async (message, context = {}, history = []) => {
-  if (!hasUsableApiKey) {
-    return {
-      message: generateRuleBasedChatReply(message, context, history),
-      success: true,
-      mode: "offline-trained-rules",
-      error: "Missing or placeholder OpenRouter API key",
-    };
-  }
-
   try {
+    // Handle null or undefined context
+    context = context || {};
+    
     const recentConversation = history
       .slice(-6)
       .map((item) => ({
@@ -112,19 +105,14 @@ export const sendChatMessage = async (message, context = {}, history = []) => {
         content: String(item.content || "").slice(0, 500),
       }));
 
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(BACKEND_CHAT_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
       },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [
-          {
-            role: "system",
-            content: `You are a helpful AI study assistant for students. You help with:
+        model: process.env.REACT_APP_OPENROUTER_MODEL || undefined,
+        systemPrompt: `You are a helpful AI study assistant for students. You help with:
 - Creating study schedules based on stress levels and sleep patterns
 - Providing wellness advice
 - Answering questions about productivity and time management
@@ -143,7 +131,11 @@ Response method (easy training rules):
 - If user asks for schedule, return a time-block plan.
 - Use recent conversation context when relevant.
 
-Be friendly, concise, and practical. Keep responses under 150 words.`
+Be friendly, concise, and practical. Keep responses under 150 words.`,
+        messages: [
+          {
+            role: "user",
+            content: "Conversation context follows. Respond to the latest user message.",
           },
           ...recentConversation,
           {
@@ -151,25 +143,21 @@ Be friendly, concise, and practical. Keep responses under 150 words.`
             content: message
           }
         ],
-        max_tokens: 300,
-        temperature: 0.7,
       }),
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data?.error || "Chat request failed");
 
-    if (!response.ok) {
-      throw new Error(data?.error?.message || "Chat request failed");
-    }
-    
-    if (data.error) {
-      throw new Error(data.error.message);
-    }
+    const reply =
+      data?.content?.[0]?.text ||
+      data?.choices?.[0]?.message?.content ||
+      "No response generated.";
 
     return {
-      message: data.choices[0].message.content,
+      message: reply,
       success: true,
-      mode: "openrouter",
+      mode: "backend-openrouter",
     };
   } catch (error) {
     console.error("AI Chat error:", error);
@@ -228,33 +216,33 @@ Return ONLY valid JSON in this format:
   "tips": ["Tip 1", "Tip 2"]
 }`;
 
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(BACKEND_CHAT_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
       },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
+        model: process.env.REACT_APP_OPENROUTER_MODEL || undefined,
         messages: [
           {
             role: "user",
             content: prompt
           }
         ],
-        max_tokens: 1500,
-        temperature: 0.3,
       }),
     });
 
     const data = await response.json();
     
-    if (data.error) {
-      throw new Error(data.error.message);
+    if (!response.ok) {
+      throw new Error(data?.error || "Schedule request failed");
     }
 
-    const content = data.choices[0].message.content;
+    const content =
+      data?.content?.[0]?.text ||
+      data?.choices?.[0]?.message?.content ||
+      "";
+
     // Extract JSON from response
     const jsonMatch = content.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
@@ -275,15 +263,13 @@ Return ONLY valid JSON in this format:
 
 export const generateLiveFaceSuggestion = async (sessionContext = {}, studentContext = {}) => {
   try {
-    const response = await fetch(OPENROUTER_API_URL, {
+    const response = await fetch(BACKEND_CHAT_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": window.location.origin,
       },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
+        model: process.env.REACT_APP_OPENROUTER_MODEL || undefined,
         messages: [
           {
             role: "system",
@@ -335,12 +321,13 @@ Student Context:
 
     const data = await response.json();
 
-    if (data.error) {
-      throw new Error(data.error.message);
-    }
+    if (!response.ok) throw new Error(data?.error || "Suggestion request failed");
 
     return {
-      message: data.choices?.[0]?.message?.content || "Take a 30-second reset breath and refocus on one clear task.",
+      message:
+        data?.content?.[0]?.text ||
+        data?.choices?.[0]?.message?.content ||
+        "Take a 30-second reset breath and refocus on one clear task.",
       success: true,
     };
   } catch (error) {
