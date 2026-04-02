@@ -2,8 +2,14 @@ import React, { useState, useRef, useEffect } from "react";
 import { sendChatMessage } from "../services/aiService";
 import "../styles/AIChatbot.css";
 
-function AIChatbot({ studentContext }) {
+/**
+ * AIChatbot - Floating AI Assistant
+ * Renders as a single floating widget at bottom-right of the screen.
+ * Should be rendered once globally (e.g., in App.js).
+ */
+function AIChatbot({ studentContext = null }) {
   const [isOpen, setIsOpen] = useState(false);
+
   const [messages, setMessages] = useState([
     {
       role: "assistant",
@@ -42,7 +48,7 @@ function AIChatbot({ studentContext }) {
 
     const aiMessage = {
       role: "assistant",
-      content: response.message,
+        content: response?.message || "I couldn't process that request. Please try again.",
       timestamp: new Date(),
     };
 
@@ -62,16 +68,9 @@ function AIChatbot({ studentContext }) {
   };
 
   return (
-    <>
-      {/* Chat Button */}
-      <button className="chat-toggle-btn" onClick={() => setIsOpen(!isOpen)}>
-        {isOpen ? "✕" : "💬"}
-        {!isOpen && <span className="chat-badge">AI</span>}
-      </button>
-
-      {/* Chat Window */}
+    <div className="ai-chatbot-floating fixed bottom-6 right-6 z-50 flex flex-col items-end">
       {isOpen && (
-        <div className="chat-window">
+        <div className="chat-window chat-window-open">
           <div className="chat-header">
             <div className="chat-header-content">
               <div className="chat-avatar">🤖</div>
@@ -82,9 +81,6 @@ function AIChatbot({ studentContext }) {
                 </p>
               </div>
             </div>
-            <button className="chat-close" onClick={() => setIsOpen(false)}>
-              ✕
-            </button>
           </div>
 
           <div className="chat-messages">
@@ -152,7 +148,17 @@ function AIChatbot({ studentContext }) {
           </form>
         </div>
       )}
-    </>
+
+      <button
+        className="chat-toggle-btn"
+        onClick={() => setIsOpen(!isOpen)}
+        aria-label={isOpen ? "Close AI assistant" : "Open AI assistant"}
+        title="AI Assistant"
+      >
+        {isOpen ? "✕" : "💬"}
+        {!isOpen && <span className="chat-badge">AI</span>}
+      </button>
+    </div>
   );
 }
 

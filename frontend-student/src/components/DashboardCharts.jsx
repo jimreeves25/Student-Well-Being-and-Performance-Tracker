@@ -134,8 +134,8 @@ function DashboardCharts({ summary, hasDailyLogs, onRequestLog }) {
   return (
     <div className="dashboard-charts-section">
       <div className="charts-section-header">
-        <h2>📊 Your Weekly Analytics</h2>
-        <p>Adjust the controls to explore different ranges and focus areas</p>
+        <h2>Weekly Analytics</h2>
+        <p>Explore trends with interactive range and focus controls.</p>
       </div>
 
       {!hasChartData ? (

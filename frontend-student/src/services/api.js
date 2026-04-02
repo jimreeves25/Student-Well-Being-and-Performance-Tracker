@@ -103,6 +103,26 @@ export const loginUser = async (data) => {
   return result;
 };
 
+export const changePasswordAPI = async (currentPassword, newPassword) => {
+  const token = localStorage.getItem("token");
+  const response = await fetch(`${BASE_URL}/auth/change-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.message || "Failed to change password");
+  }
+
+  return data;
+};
+
 export const signupParent = async (data) => {
   const res = await fetch(`${BASE_URL}/parent/signup`, {
     method: "POST",
@@ -272,12 +292,18 @@ export const getParentAlerts = async (params = {}) => {
   if (params.q) searchParams.set("q", params.q);
   if (params.limit) searchParams.set("limit", String(params.limit));
 
-  const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
-  const res = await fetch(`${BASE_URL}/parent/alerts${suffix}`, {
-    method: "GET",
-    headers: getParentAuthHeaders(),
-  });
-  return handleResponse(res);
+  try {
+    const suffix = searchParams.toString() ? `?${searchParams.toString()}` : "";
+    const res = await fetch(`${BASE_URL}/parent/alerts${suffix}`, {
+      method: "GET",
+      headers: getParentAuthHeaders(),
+    });
+    const data = await handleResponse(res);
+    return Array.isArray(data) ? data : [];
+  } catch (error) {
+    console.error("Failed to fetch parent alerts:", error);
+    return [];
+  }
 };
 
 export const markParentAlertRead = async (alertId) => {
@@ -289,19 +315,31 @@ export const markParentAlertRead = async (alertId) => {
 };
 
 export const getParentReports = async () => {
-  const res = await fetch(`${BASE_URL}/parent/reports`, {
-    method: "GET",
-    headers: getParentAuthHeaders(),
-  });
-  return handleResponse(res);
+  try {
+    const res = await fetch(`${BASE_URL}/parent/reports`, {
+      method: "GET",
+      headers: getParentAuthHeaders(),
+    });
+    const data = await handleResponse(res);
+    return data ?? {};
+  } catch (error) {
+    console.error("Failed to fetch parent reports:", error);
+    return {};
+  }
 };
 
 export const getParentNotificationPreferences = async () => {
-  const res = await fetch(`${BASE_URL}/parent/preferences/notifications`, {
-    method: "GET",
-    headers: getParentAuthHeaders(),
-  });
-  return handleResponse(res);
+  try {
+    const res = await fetch(`${BASE_URL}/parent/preferences/notifications`, {
+      method: "GET",
+      headers: getParentAuthHeaders(),
+    });
+    const data = await handleResponse(res);
+    return data ?? { notifyByEmail: true, notifyByDashboard: true, notifyByPush: false };
+  } catch (error) {
+    console.error("Failed to fetch parent notification preferences:", error);
+    return { notifyByEmail: true, notifyByDashboard: true, notifyByPush: false };
+  }
 };
 
 export const updateParentNotificationPreferences = async (preferences) => {

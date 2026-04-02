@@ -1,4 +1,8 @@
-.container {
+.auth-container {
+  /* Force full-viewport auth layout so parent shells can't "split" it */
+  position: fixed;
+  inset: 0;
+  width: 100vw;
   min-height: 100vh;
   display: flex;
   justify-content: center;
@@ -6,14 +10,16 @@
   background: linear-gradient(135deg, #d9e7ff 0%, #f1f0ff 52%, #fff4de 100%);
   font-family: "Avenir Next", "Segoe UI", "Trebuchet MS", sans-serif;
   padding: 18px;
+  box-sizing: border-box;
+  overflow: auto;
 }
 
-.container.parent-mode {
+.auth-container.parent-mode {
   background: radial-gradient(circle at 18% 20%, #ffffffad 0, #ffffff00 38%),
     linear-gradient(138deg, #e2f8f5 0%, #d8efff 56%, #fff5df 100%);
 }
 
-.card {
+.auth-container .card {
   background: #ffffff;
   width: min(440px, 100%);
   padding: 34px;
@@ -23,12 +29,12 @@
   text-align: center;
 }
 
-.parent-mode .card {
+.auth-container.parent-mode .card {
   background: linear-gradient(165deg, #ffffff 0%, #f6fdff 100%);
   border-color: #cde7ef;
 }
 
-.title {
+.auth-container .title {
   font-size: 2.3rem;
   font-weight: 800;
   color: #21507f;
@@ -36,17 +42,17 @@
   letter-spacing: -0.02em;
 }
 
-.parent-mode .title {
+.auth-container.parent-mode .title {
   color: #0d6572;
 }
 
-.subtitle {
+.auth-container .subtitle {
   font-size: 0.98rem;
   color: #506781;
   margin-bottom: 22px;
 }
 
-.account-switch {
+.auth-container .account-switch {
   display: flex;
   gap: 8px;
   margin-bottom: 14px;
@@ -55,7 +61,7 @@
   border-radius: 999px;
 }
 
-.account-pill {
+.auth-container .account-pill {
   flex: 1;
   border: 0;
   border-radius: 999px;
@@ -68,18 +74,18 @@
   transition: all 0.2s ease;
 }
 
-.account-pill.active {
+.auth-container .account-pill.active {
   background: linear-gradient(135deg, #5f8ed2 0%, #476db5 100%);
   color: #fff;
   box-shadow: 0 8px 18px rgba(74, 112, 179, 0.35);
 }
 
-.parent-mode .account-pill.active {
+.auth-container.parent-mode .account-pill.active {
   background: linear-gradient(135deg, #138b84 0%, #0c6f94 100%);
   box-shadow: 0 8px 18px rgba(17, 114, 136, 0.35);
 }
 
-.mode-hint {
+.auth-container .mode-hint {
   margin: 0 0 14px;
   border-radius: 10px;
   padding: 10px;
@@ -89,7 +95,7 @@
   border: 1px solid #c2e8e5;
 }
 
-input {
+.auth-container input {
   width: 100%;
   padding: 14px;
   margin-bottom: 16px;
@@ -100,18 +106,18 @@ input {
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
-input:focus {
+.auth-container input:focus {
   outline: none;
   border-color: #4f83cb;
   box-shadow: 0 0 0 4px rgba(89, 137, 205, 0.12);
 }
 
-.parent-mode input:focus {
+.auth-container.parent-mode input:focus {
   border-color: #0e7e8d;
   box-shadow: 0 0 0 4px rgba(12, 129, 143, 0.14);
 }
 
-.login-btn {
+.auth-container .login-btn {
   width: 100%;
   padding: 13px;
   background: linear-gradient(135deg, #5f8ed2 0%, #476db5 100%);
@@ -124,80 +130,80 @@ input:focus {
   transition: all 0.22s ease;
 }
 
-.parent-mode .login-btn {
+.auth-container.parent-mode .login-btn {
   background: linear-gradient(135deg, #138b84 0%, #0c6f94 100%);
 }
 
-.login-btn:hover {
+.auth-container .login-btn:hover {
   transform: translateY(-2px);
   box-shadow: 0 10px 24px rgba(66, 109, 181, 0.32);
 }
 
-.parent-mode .login-btn:hover {
+.auth-container.parent-mode .login-btn:hover {
   box-shadow: 0 10px 24px rgba(12, 123, 145, 0.3);
 }
 
-.login-btn:disabled {
+.auth-container .login-btn:disabled {
   opacity: 0.65;
   cursor: not-allowed;
   transform: none;
 }
 
-.signup-text {
+.auth-container .signup-text {
   margin-top: 18px;
   color: #576f87;
 }
 
-.signup-link {
+.auth-container .signup-link {
   color: #416fad;
   cursor: pointer;
   font-weight: 700;
 }
 
-.parent-mode .signup-link {
+.auth-container.parent-mode .signup-link {
   color: #0d7f8b;
 }
 
-.signup-link:hover {
+.auth-container .signup-link:hover {
   text-decoration: underline;
 }
 
-.links {
+.auth-container .links {
   margin-top: 15px;
   font-size: 14px;
 }
 
-.links a {
+.auth-container .links a {
   color: #667eea;
   text-decoration: none;
   font-weight: 600;
 }
 
-.links a:hover {
+.auth-container .links a:hover {
   text-decoration: underline;
 }
 
-footer {
+.auth-container footer {
   margin-top: 20px;
   font-size: 12px;
   color: #6b7280;
 }
 
 @media (max-width: 520px) {
-  .card {
+  .auth-container .card {
     padding: 24px 18px;
   }
 
-  .title {
+  .auth-container .title {
     font-size: 2rem;
   }
 
-  .account-switch {
+  .auth-container .account-switch {
     flex-direction: column;
     border-radius: 12px;
   }
 
-  .account-pill {
+  .auth-container .account-pill {
     border-radius: 10px;
   }
 }

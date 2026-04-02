@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const DailyLog = require("../models/DailyLog");
 const StudySession = require("../models/StudySession");
+const User = require("../models/User");
 const { Op } = require("sequelize");
 
 const jwt = require("jsonwebtoken");
@@ -107,7 +108,7 @@ const computeAcademicScore = (sessions = []) => {
   };
 };
 
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) {
     return res.status(401).json({ message: "No token provided" });
@@ -116,6 +117,11 @@ const authMiddleware = (req, res, next) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET || "your_secret_key");
     req.userId = decoded.userId;
+    const user = await User.findByPk(req.userId);
+    if (!user) {
+      return res.status(401).json({ message: "User not found for token" });
+    }
+    req.user = user;
     next();
   } catch (error) {
     return res.status(401).json({ message: "Invalid token" });
@@ -253,7 +259,7 @@ router.get("/summary", authMiddleware, async (req, res) => {
 router.post("/log", authMiddleware, async (req, res) => {
   try {
     const userId = req.userId;
-    const logData = req.body;
+    const logData = req.body || {};
 
     // Check if log for today exists
     const today = new Date();
@@ -268,13 +274,14 @@ router.post("/log", authMiddleware, async (req, res) => {
 
     if (log) {
       // Update existing log
-      await log.update(logData);
+      const { userId: _ignoredUserId, id: _ignoredId, createdAt: _ignoredCreatedAt, updatedAt: _ignoredUpdatedAt, ...safeLogData } = logData;
+      await log.update(safeLogData);
     } else {
       // Create new log
       log = await DailyLog.create({
+        ...logData,
         userId,
         date: new Date(),
-        ...logData,
       });
     }
 

@@ -35,8 +35,8 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
 
     const params = {
       subjects,
-      stressIndex: studentContext.stressIndex || 50,
-      avgSleepHours: studentContext.avgSleepHours || 7,
+        stressIndex: studentContext?.stressIndex ?? 50,
+        avgSleepHours: studentContext?.avgSleepHours ?? 7,
       ...scheduleParams,
     };
 

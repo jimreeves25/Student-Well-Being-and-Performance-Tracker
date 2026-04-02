@@ -1,27 +1,36 @@
 /* AI Chatbot Styles - Modern Design */
 
-.chat-toggle-btn {
+.ai-chatbot-floating {
   position: fixed;
-  bottom: 30px;
-  right: 30px;
-  width: 60px;
-  height: 60px;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1050;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* Removed: floating actions container is no longer needed */
+
+.chat-toggle-btn {
+  position: relative;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border: none;
   color: white;
   font-size: 24px;
   cursor: pointer;
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
   transition: all 0.3s ease;
-  z-index: 1000;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.4);
 }
 
 .chat-toggle-btn:hover {
-  transform: scale(1.1);
+  transform: scale(1.08);
   box-shadow: 0 12px 32px rgba(102, 126, 234, 0.5);
 }
 
@@ -38,18 +47,21 @@
 }
 
 .chat-window {
-  position: fixed;
-  bottom: 100px;
-  right: 30px;
-  width: 400px;
-  height: 600px;
+  width: min(340px, calc(100vw - 24px));
+  height: min(460px, calc(100vh - 110px));
+  max-height: 500px;
   background: white;
   border-radius: 16px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
-  z-index: 1000;
-  animation: slideUp 0.3s ease;
+  margin-bottom: 12px;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.chat-window-open {
+  animation: slideUp 0.25s ease;
 }
 
 @keyframes slideUp {
@@ -122,22 +134,7 @@
   }
 }
 
-.chat-close {
-  background: rgba(255, 255, 255, 0.2);
-  border: none;
-  color: white;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  cursor: pointer;
-  font-size: 18px;
-  transition: background 0.2s;
-}
-
-.chat-close:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
+/* Header styling */
 .chat-messages {
   flex: 1;
   overflow-y: auto;
@@ -321,15 +318,21 @@
 
 /* Responsive */
 @media (max-width: 768px) {
-  .chat-window {
-    width: calc(100vw - 40px);
-    height: calc(100vh - 140px);
-    right: 20px;
-    bottom: 100px;
+  .ai-chatbot-floating {
+    right: 12px;
+    bottom: 12px;
   }
 
-  .chat-toggle-btn {
-    bottom: 20px;
-    right: 20px;
+  .chat-window {
+    width: min(340px, calc(100vw - 24px));
+    height: min(460px, calc(100vh - 96px));
+    margin-bottom: 10px;
+  }
+}
+
+@media (max-width: 420px) {
+  .chat-window {
+    width: calc(100vw - 24px);
+    height: min(430px, calc(100vh - 90px));
   }
 }
