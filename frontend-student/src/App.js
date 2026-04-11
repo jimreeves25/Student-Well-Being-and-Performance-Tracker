@@ -23,11 +23,26 @@ function App() {
   useEffect(() => {
     const studentToken = localStorage.getItem("token");
     const parentToken = localStorage.getItem("parentToken");
-    const savedRole = localStorage.getItem("authRole") || "student";
+    const savedRole = localStorage.getItem("authRole");
+    const hasStudentToken = Boolean(studentToken);
+    const hasParentToken = Boolean(parentToken);
 
-    if (studentToken || parentToken) {
+    let resolvedRole = savedRole;
+    if (!resolvedRole) {
+      resolvedRole = hasParentToken && !hasStudentToken ? "parent" : "student";
+    }
+
+    // Keep role in sync with whichever token is actually present.
+    if (resolvedRole === "student" && !hasStudentToken && hasParentToken) {
+      resolvedRole = "parent";
+    } else if (resolvedRole === "parent" && !hasParentToken && hasStudentToken) {
+      resolvedRole = "student";
+    }
+
+    if (hasStudentToken || hasParentToken) {
       setIsAuthenticated(true);
-      setAuthRole(savedRole);
+      setAuthRole(resolvedRole);
+      localStorage.setItem("authRole", resolvedRole);
       setCurrentPage("dashboard");
     }
 

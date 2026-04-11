@@ -159,6 +159,10 @@ export const getDashboardSummary = async () => {
 };
 
 export const saveDailyLog = async (data) => {
+  if (!getToken()) {
+    throw new Error("Student session not found. Please login again.");
+  }
+
   const res = await fetch(`${BASE_URL}/dashboard/log`, {
     method: "POST",
     headers: getAuthHeaders(),
@@ -347,6 +351,21 @@ export const updateParentNotificationPreferences = async (preferences) => {
     method: "PATCH",
     headers: getParentAuthHeaders(),
     body: JSON.stringify(preferences),
+  });
+  return handleResponse(res);
+};
+
+// AI Chat API
+export const sendChatMessage = async (messages, systemPrompt = "") => {
+  const res = await fetch(`${BASE_URL}/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messages,
+      systemPrompt,
+    }),
   });
   return handleResponse(res);
 };

@@ -1,8 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   changePasswordAPI,
+  getAssignments,
+  getDailyLogs,
   getDashboardSummary,
   getParentLinkRequests,
+  getStudySessions,
   generateParentLinkCode,
   respondToParentLinkRequest,
   saveDailyLog,
@@ -42,6 +45,9 @@ const VIEWS = [
 ];
 
 const SETTINGS_NOTIFICATION_PREFS_KEY = "settingsNotificationPrefs";
+const DASHBOARD_SUMMARY_CACHE_PREFIX = "dashboardSummaryCache";
+
+const getDashboardSummaryCacheKey = (userId) => `${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId || "anonymous"}`;
 
 const themes = {
   dark: {
@@ -919,10 +925,15 @@ function Dashboard({ onLogout }) {
           : "light"
         : themeName;
   const theme = themes[effectiveThemeName] || themes.dark;
-  const [summary, setSummary] = useState(null);
+  const storedUser = loadFromStorage("user", {});
+  const userId = storedUser?.id || "anonymous";
+  const authToken = localStorage.getItem("token") || "";
+  const summaryCacheKey = getDashboardSummaryCacheKey(userId);
+
+  const [summary, setSummary] = useState(() => loadFromStorage(summaryCacheKey, null));
   const assignmentPlanner = useAssignments();
   const assignments = assignmentPlanner.rawAssignments;
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !loadFromStorage(summaryCacheKey, null));
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeView, setActiveView] = useState("overview");
   const [showLogForm, setShowLogForm] = useState(false);
@@ -972,9 +983,43 @@ function Dashboard({ onLogout }) {
   });
 
   useEffect(() => {
-    fetchDashboard();
-    fetchParentRequests();
-  }, []);
+    if (!authToken) {
+      setLoading(false);
+      return;
+    }
+
+    const cachedSummary = loadFromStorage(summaryCacheKey, null);
+    if (cachedSummary) {
+      setSummary(cachedSummary);
+      setLoading(false);
+    }
+
+    let isActive = true;
+
+    const refreshAllData = async () => {
+      if (!cachedSummary) {
+        setLoading(true);
+      }
+
+      await Promise.allSettled([
+        fetchDashboard({ cacheKey: summaryCacheKey }),
+        fetchParentRequests(),
+        fetchDailyLogs(),
+        fetchAssignmentsFromApi(),
+        fetchStudySessionsForStreak(),
+      ]);
+
+      if (isActive) {
+        setLoading(false);
+      }
+    };
+
+    refreshAllData();
+
+    return () => {
+      isActive = false;
+    };
+  }, [authToken, summaryCacheKey]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -1496,14 +1541,76 @@ function Dashboard({ onLogout }) {
     window.location.reload();
   };
 
-  const fetchDashboard = async () => {
+  const fetchDashboard = async ({ cacheKey = summaryCacheKey } = {}) => {
     try {
       const data = await getDashboardSummary();
       setSummary(data);
+      saveToStorage(cacheKey, data);
     } catch (error) {
       console.error("Error fetching dashboard:", error);
-    } finally {
-      setLoading(false);
+    }
+  };
+
+  const fetchDailyLogs = async () => {
+    try {
+      const logs = await getDailyLogs();
+      if (!Array.isArray(logs)) return;
+
+      setSummary((prev) => {
+        const next = {
+          ...(prev || {}),
+          recentLogs: logs.slice(0, 7),
+          todayLog: logs[0] || null,
+        };
+        saveToStorage(summaryCacheKey, next);
+        return next;
+      });
+    } catch (error) {
+      console.error("Error fetching daily logs:", error);
+    }
+  };
+
+  const fetchAssignmentsFromApi = async () => {
+    try {
+      const apiAssignments = await getAssignments();
+      if (!Array.isArray(apiAssignments)) return;
+
+      const normalizedAssignments = apiAssignments.map((assignment) => ({
+        id: assignment.id,
+        title: assignment.title,
+        subject: assignment.subject,
+        description: assignment.description || "",
+        dueDate: assignment.dueDate || "",
+        priority: assignment.priority || "medium",
+        status: assignment.status || "pending",
+        progress: Number.isFinite(Number(assignment.progress)) ? Number(assignment.progress) : 0,
+        createdAt: assignment.createdAt,
+        updatedAt: assignment.updatedAt,
+        completedAt: assignment.completedAt || null,
+      }));
+
+      saveToStorage("studentAssignments", normalizedAssignments);
+      assignmentPlanner.refreshAssignments();
+    } catch (error) {
+      console.error("Error fetching assignments:", error);
+    }
+  };
+
+  const fetchStudySessionsForStreak = async () => {
+    try {
+      const sessions = await getStudySessions();
+      if (!Array.isArray(sessions)) return;
+
+      setSummary((prev) => {
+        const next = {
+          ...(prev || {}),
+          upcomingSessions: sessions,
+        };
+        saveToStorage(summaryCacheKey, next);
+        return next;
+      });
+    } catch (error) {
+      console.error("Error fetching study sessions:", error);
     }
   };
 
@@ -1596,6 +1703,77 @@ function Dashboard({ onLogout }) {
       alert("Error saving log: " + error.message);
     }
   };
+
+  useEffect(() => {
+    const addDailyLog = async (data = {}) => {
+      const moodMap = {
+        happy: 8,
+        good: 7,
+        calm: 7,
+        neutral: 5,
+        okay: 5,
+        stressed: 4,
+        sad: 3,
+        tired: 4,
+      };
+
+      const moodKey = String(data?.mood || "").trim().toLowerCase();
+      const nextPayload = {
+        ...logForm,
+        ...data,
+      };
+
+      if (!Number.isFinite(Number(nextPayload.moodRating)) && moodMap[moodKey]) {
+        nextPayload.moodRating = moodMap[moodKey];
+      }
+
+      await saveDailyLog(nextPayload);
+      setLogForm((prev) => ({ ...prev, ...nextPayload }));
+      await fetchDashboard();
+      return { success: true };
+    };
+
+    const addAssignment = async (data = {}) => {
+      const created = assignmentPlanner.addAssignment({
+        title: String(data?.title || "New Assignment").trim(),
+        subject: String(data?.subject || "General").trim(),
+        description: String(data?.description || "").trim(),
+        dueDate: data?.dueDate || "",
+        priority: data?.priority || "medium",
+        status: data?.status || "pending",
+        progress: Number.isFinite(Number(data?.progress)) ? Number(data.progress) : 0,
+      });
+      return created;
+    };
+
+    const updateTodayLog = async (data = {}) => {
+      const field = String(data?.field || "").trim();
+      if (!field) return { success: false, message: "Missing field" };
+
+      const nextPayload = {
+        ...logForm,
+        [field]: data?.value,
+      };
+
+      await saveDailyLog(nextPayload);
+      setLogForm(nextPayload);
+      await fetchDashboard();
+      return { success: true };
+    };
+
+    const getAssignments = async () => assignmentPlanner.allAssignments;
+
+    window.appActions = {
+      addDailyLog,
+      addAssignment,
+      updateTodayLog,
+      getAssignments,
+    };
+
+    return () => {
+      delete window.appActions;
+    };
+  }, [assignmentPlanner, assignmentPlanner.allAssignments, logForm]);
 
 
   if (loading) {

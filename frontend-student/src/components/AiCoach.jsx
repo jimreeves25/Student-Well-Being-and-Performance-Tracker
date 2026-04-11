@@ -18,7 +18,7 @@ const MODES = {
     label: "Plan My Day",
     placeholder: "Tell me about your day...",
     system:
-      "You are an AI productivity coach helping a student plan their study day. Ask about their subjects, energy levels, deadlines, and breaks. Then generate a realistic time-blocked schedule. Be practical: specific time slots, buffer time, breaks included. Use plain text with time slots like 9:00-10:30: Math revision. No markdown.",
+      "You are an AI productivity coach helping a student plan their study day. Ask about their subjects, energy levels, deadlines, and breaks. Then generate a realistic time-blocked schedule. Be practical: specific time slots, buffer time, breaks included. Use plain text with time slots like 9:00-10:30: Math revision. No markdown. When the user asks to add or schedule an assignment, include this tag in your reply: [ACTION:ADD_ASSIGNMENT:{\"title\":\"TITLE\",\"dueDate\":\"ISO_DATE\",\"priority\":\"medium\",\"status\":\"pending\"}]",
     pills: [
       "Plan today for me",
       "I have exams next week",
@@ -58,6 +58,25 @@ function getModeIntro(mode) {
   if (mode === "wellness") return "Tell me how you feel right now and we will make a calm, realistic plan.";
   if (mode === "quiz") return "Give me a subject and I will quiz you one question at a time.";
   return "How can I support your learning today?";
+}
+
+function parseAddAssignmentActionTag(text) {
+  const match = text.match(/\[ACTION:ADD_ASSIGNMENT:(\{[\s\S]*?\})\]/);
+  if (!match) return { cleanedText: text, actionData: null };
+
+  let actionData = null;
+  try {
+    actionData = JSON.parse(match[1]);
+  } catch {
+    actionData = null;
+  }
+
+  const cleanedText = text
+    .replace(match[0], "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return { cleanedText, actionData };
 }
 
 export default function AiCoach() {
@@ -128,9 +147,22 @@ export default function AiCoach() {
 
       const data = await response.json();
       const reply = data.content?.map((b) => b.text || "").join("") || "Sorry, I could not generate a response.";
+      const { cleanedText, actionData } = parseAddAssignmentActionTag(reply);
 
-      setMessages((prev) => [...prev, { role: "ai", text: reply }]);
-      setHistory([...newHistory, { role: "assistant", content: reply }]);
+      let actionConfirmation = "";
+      if (actionData && typeof window.appActions?.addAssignment === "function") {
+        try {
+          await window.appActions.addAssignment(actionData);
+          actionConfirmation = "✅ Assignment added!";
+        } catch {
+          actionConfirmation = "";
+        }
+      }
+
+      const displayedReply = cleanedText || reply;
+
+      setMessages((prev) => [...prev, { role: "ai", text: displayedReply, actionConfirmation }]);
+      setHistory([...newHistory, { role: "assistant", content: displayedReply }]);
     } catch (err) {
       setMessages((prev) => [
         ...prev,
@@ -209,7 +241,14 @@ export default function AiCoach() {
       <div className="ai-coach-chat-list" ref={chatListRef}>
         {messages.map((message, index) => (
           <div key={`${message.role}-${index}`} className={`ai-coach-row ${message.role === "user" ? "user" : "assistant"}`}>
-            <div className="ai-coach-bubble">{message.text}</div>
+            <div>
+              <div className="ai-coach-bubble">{message.text}</div>
+              {message.actionConfirmation ? (
+                <div style={{ color: "#15803d", fontSize: "12px", marginTop: "6px", fontWeight: 600 }}>
+                  {message.actionConfirmation}
+                </div>
+              ) : null}
+            </div>
           </div>
         ))}
 

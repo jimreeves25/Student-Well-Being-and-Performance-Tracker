@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { generateLiveFaceSuggestion } from "../../services/aiService";
 import {
   endLiveSessionTracking,
   heartbeatLiveSessionTracking,
@@ -65,6 +64,46 @@ const getActivitySet = (moodTag, stressScore, fatigueScore) => {
     "Use a 25-minute focus timer with 5-minute break.",
     "Work on one task only for the next 10 minutes.",
   ];
+};
+
+const generateLiveFaceSuggestion = async (sessionContext = {}, studentContext = {}) => {
+  const moodTag = sessionContext.moodTag || "Steady";
+  const stressScore = Number(sessionContext.stressScore || studentContext.stressLevel || 0);
+  const fatigueScore = Number(sessionContext.fatigueScore || 0);
+  const drowsyRisk = Number(sessionContext.drowsyRisk || 0);
+  const reason = sessionContext.reason || "periodic";
+
+  if (!sessionContext.isFaceDetected && Number(sessionContext.noFaceStreakSeconds || 0) >= 20) {
+    return {
+      message: "I cannot see you clearly right now. Sit upright, move back into frame, and restart with one 10-minute focus sprint.",
+    };
+  }
+
+  if (reason === "drowsy") {
+    return {
+      message:
+        "You look tired right now. Stand up for 45 seconds, drink water, then do one small task for 8 minutes before reassessing.",
+    };
+  }
+
+  if (reason === "stress" || stressScore >= 70) {
+    return {
+      message:
+        "Stress seems elevated. Slow your breathing for 45 seconds, relax shoulders, and continue with only one clear step for the next 10 minutes.",
+    };
+  }
+
+  if (drowsyRisk >= 60 || fatigueScore >= 65) {
+    return {
+      message:
+        "Fatigue is building. Take a 2-minute reset away from the screen, then return for a shorter focused block.",
+    };
+  }
+
+  const activitySet = getActivitySet(moodTag, stressScore, fatigueScore);
+  return {
+    message: activitySet[0] || "Keep going with one focused task for 10 minutes.",
+  };
 };
 
 const inferEmotionAndStress = (blendshapeCategories = []) => {
