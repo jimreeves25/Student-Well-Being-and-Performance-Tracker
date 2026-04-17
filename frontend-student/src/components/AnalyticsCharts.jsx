@@ -29,6 +29,50 @@ ChartJS.register(
   Filler
 );
 
+const AXIS_TICK_COLOR = '#d8e3ef';
+const GRID_COLOR = 'rgba(216, 227, 239, 0.22)';
+const LEGEND_COLOR = '#e9f2fb';
+
+const baseLegend = {
+  display: true,
+  position: 'top',
+  labels: {
+    color: LEGEND_COLOR,
+    usePointStyle: true,
+    padding: 18,
+    boxWidth: 12,
+    boxHeight: 12,
+    font: { size: 13, weight: '600' },
+  },
+};
+
+const baseTooltip = {
+  backgroundColor: 'rgba(10, 14, 28, 0.94)',
+  titleColor: '#ffffff',
+  bodyColor: '#e9f2fb',
+  borderColor: 'rgba(102, 174, 232, 0.55)',
+  borderWidth: 1,
+  padding: 12,
+  cornerRadius: 8,
+  titleFont: { size: 13, weight: '700' },
+  bodyFont: { size: 13 },
+};
+
+const axisScales = (max = undefined) => ({
+  y: {
+    beginAtZero: true,
+    ...(Number.isFinite(max) ? { max } : {}),
+    grid: { color: GRID_COLOR, lineWidth: 1.1 },
+    border: { color: GRID_COLOR },
+    ticks: { color: AXIS_TICK_COLOR, font: { size: 12, weight: '600' }, precision: 0 },
+  },
+  x: {
+    grid: { color: 'rgba(216, 227, 239, 0.1)' },
+    border: { color: GRID_COLOR },
+    ticks: { color: AXIS_TICK_COLOR, font: { size: 12, weight: '600' } },
+  },
+});
+
 // Stress Index Trend
 export const StressIndexChart = ({ data }) => {
   const chartData = {
@@ -53,37 +97,12 @@ export const StressIndexChart = ({ data }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
-      },
-      tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
-        titleFont: { size: 14, weight: 'bold' },
-        bodyFont: { size: 13 },
-      },
+      legend: baseLegend,
+      tooltip: baseTooltip,
     },
-    scales: {
-      y: {
-        beginAtZero: true,
-        max: 100,
-        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-      x: {
-        grid: { display: false },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-    },
+    scales: axisScales(100),
   };
 
   return <Line data={chartData} options={options} />;
@@ -119,21 +138,11 @@ export const StudySleepChart = ({ summary, dataset }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
-      },
+      legend: baseLegend,
       tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
+        ...baseTooltip,
         callbacks: {
           label: function(context) {
             return context.dataset.label + ': ' + context.parsed.y + 'h';
@@ -141,17 +150,7 @@ export const StudySleepChart = ({ summary, dataset }) => {
         },
       },
     },
-    scales: {
-      y: {
-        beginAtZero: true,
-        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-      x: {
-        grid: { display: false },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-    },
+    scales: axisScales(),
   };
 
   return <Bar data={chartData} options={options} />;
@@ -189,21 +188,14 @@ export const WellnessBreakdownChart = ({ summary }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
       legend: {
-        display: true,
+        ...baseLegend,
         position: 'right',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
       },
       tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
+        ...baseTooltip,
         callbacks: {
           label: function(context) {
             return context.label + ': ' + context.parsed + '%';
@@ -254,29 +246,19 @@ export const ActivityRadarChart = ({ summary }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
-      },
-      tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
-      },
+      legend: baseLegend,
+      tooltip: baseTooltip,
     },
     scales: {
       r: {
         beginAtZero: true,
         max: 10,
-        grid: { color: 'rgba(0, 0, 0, 0.1)' },
-        ticks: { color: '#666', font: { size: 11 } },
+        grid: { color: GRID_COLOR },
+        angleLines: { color: GRID_COLOR },
+        pointLabels: { color: LEGEND_COLOR, font: { size: 12, weight: '600' } },
+        ticks: { color: AXIS_TICK_COLOR, font: { size: 11, weight: '600' }, backdropColor: 'transparent' },
       },
     },
   };
@@ -307,21 +289,11 @@ export const WeeklyPerformanceChart = ({ summary }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
-      },
+      legend: baseLegend,
       tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
+        ...baseTooltip,
         callbacks: {
           label: function(context) {
             return 'Score: ' + context.parsed.y + '%';
@@ -329,18 +301,7 @@ export const WeeklyPerformanceChart = ({ summary }) => {
         },
       },
     },
-    scales: {
-      y: {
-        beginAtZero: true,
-        max: 100,
-        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-      x: {
-        grid: { display: false },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-    },
+    scales: axisScales(100),
   };
 
   return <Line data={chartData} options={options} />;
@@ -367,21 +328,11 @@ export const ScreenTimeChart = ({ summary, dataset }) => {
 
   const options = {
     responsive: true,
-    maintainAspectRatio: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: true,
-        position: 'top',
-        labels: {
-          usePointStyle: true,
-          padding: 20,
-          font: { size: 12, weight: 'bold' },
-        },
-      },
+      legend: baseLegend,
       tooltip: {
-        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-        padding: 12,
-        cornerRadius: 8,
+        ...baseTooltip,
         callbacks: {
           label: function(context) {
             return context.parsed.y + 'h';
@@ -389,17 +340,7 @@ export const ScreenTimeChart = ({ summary, dataset }) => {
         },
       },
     },
-    scales: {
-      y: {
-        beginAtZero: true,
-        grid: { color: 'rgba(0, 0, 0, 0.05)' },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-      x: {
-        grid: { display: false },
-        ticks: { color: '#666', font: { size: 12 } },
-      },
-    },
+    scales: axisScales(),
   };
 
   return <Bar data={chartData} options={options} />;

@@ -11,6 +11,16 @@ const StudySession = require("../models/StudySession");
 const LiveSessionActivity = require("../models/LiveSessionActivity");
 const ParentAlert = require("../models/ParentAlert");
 const Assignment = require("../models/Assignment");
+const NotificationPreference = require("../models/NotificationPreference");
+const { sendEmail, sendSms } = require("../utils/contactDelivery");
+const { sendNotificationToOwner } = require("../utils/notificationEngine");
+const {
+  generateOtpCode,
+  getOtpExpiryDate,
+  normalizePhone,
+  isValidEmail,
+  isValidPhone,
+} = require("../utils/verification");
 
 const router = express.Router();
 
@@ -28,6 +38,29 @@ const toBoolean = (value, fallback = false) => {
     if (["false", "0", "no", "off"].includes(next)) return false;
   }
   return fallback;
+};
+
+const parseJsonArray = (value) => {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const appendLiveSessionActivityEntry = async (session, entry) => {
+  const currentLog = parseJsonArray(session.activityLog);
+  const nextLog = [...currentLog, entry].slice(-100);
+
+  await session.update({
+    activityLog: JSON.stringify(nextLog),
+  });
+
+  return nextLog;
 };
 
 const makeToken = (payload) => jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
@@ -65,9 +98,25 @@ const parentAuth = (req, res, next) => {
   }
 };
 
+const toParentPayload = (parent) => ({
+  id: parent.id,
+  name: parent.name,
+  email: parent.email,
+  phone: parent.phone || "",
+  emailVerified: Boolean(parent.emailVerified),
+  phoneVerified: Boolean(parent.phoneVerified),
+  approvalStatus: parent.approvalStatus,
+  linkedStudentId: parent.linkedStudentId,
+  notifyByEmail: Boolean(parent.notifyByEmail),
+  notifyByDashboard: Boolean(parent.notifyByDashboard),
+  notifyByPush: Boolean(parent.notifyByPush),
+  verifiedAt: parent.verifiedAt,
+  createdAt: parent.createdAt,
+  updatedAt: parent.updatedAt,
+});
+
 const sendEmailNotification = async ({ to, subject, message }) => {
-  // Stub: wired for future SMTP provider integration.
-  console.log("[email-notification]", { to, subject, message });
+  await sendEmail({ to, subject, text: message });
 };
 
 const createParentAlerts = async ({ studentId, alertType, severity, message, metadata }) => {
@@ -130,7 +179,7 @@ const createParentAlerts = async ({ studentId, alertType, severity, message, met
 
 router.post("/signup", async (req, res) => {
   try {
-    const { name, email, password, studentId, verificationCode } = req.body;
+    const { name, email, phone, password, studentId, verificationCode } = req.body;
     const normalizedName = String(name || "").trim();
     const normalizedEmail = normalizeEmail(email);
     const normalizedStudentId = normalizeStudentId(studentId);
@@ -164,6 +213,7 @@ router.post("/signup", async (req, res) => {
     const parent = await ParentUser.create({
       name: normalizedName,
       email: normalizedEmail,
+      phone: phone ? normalizePhone(phone) : null,
       password: hashedPassword,
       approvalStatus: "pending",
       linkedStudentId: null,
@@ -178,12 +228,7 @@ router.post("/signup", async (req, res) => {
 
     res.status(201).json({
       message: "Parent account created. Waiting for student approval.",
-      parent: {
-        id: parent.id,
-        name: parent.name,
-        email: parent.email,
-        approvalStatus: parent.approvalStatus,
-      },
+      parent: toParentPayload(parent),
     });
   } catch (error) {
     console.error("Parent signup error:", error);
@@ -223,13 +268,7 @@ router.post("/login", async (req, res) => {
       message: "Parent login successful",
       token,
       role: "parent",
-      parent: {
-        id: parent.id,
-        name: parent.name,
-        email: parent.email,
-        approvalStatus: parent.approvalStatus,
-        linkedStudentId: parent.linkedStudentId,
-      },
+      parent: toParentPayload(parent),
     });
   } catch (error) {
     console.error("Parent login error:", error);
@@ -458,6 +497,29 @@ router.post("/student/assignments", studentAuth, async (req, res) => {
       status: status || "pending",
       progress: Number(progress || 0),
     });
+
+    // Notify the student immediately when a new assignment is added.
+    try {
+      const dueLabel = assignment.dueDate
+        ? ` Due: ${new Date(assignment.dueDate).toLocaleString()}.`
+        : "";
+
+      await sendNotificationToOwner({
+        ownerId: req.userId,
+        role: "student",
+        type: "assignment_assigned",
+        title: "New Assignment Assigned",
+        message: `A new assignment was added: ${assignment.title}.${dueLabel}`,
+        metadata: {
+          assignmentId: assignment.id,
+          subject: assignment.subject,
+          dueDate: assignment.dueDate,
+        },
+        channels: ["email"],
+      });
+    } catch (notificationError) {
+      console.warn("Assignment created but notification failed:", notificationError.message);
+    }
 
     res.status(201).json({ message: "Assignment created", assignment });
   } catch (error) {
@@ -838,13 +900,21 @@ router.get("/reports", parentAuth, async (req, res) => {
 
 router.get("/preferences/notifications", parentAuth, async (req, res) => {
   try {
-    const parent = await ParentUser.findByPk(req.parentId);
-    if (!parent) return res.status(404).json({ message: "Parent not found" });
+    const [preferences] = await NotificationPreference.findOrCreate({
+      where: { userId: req.parentId, role: "parent" },
+      defaults: {
+        userId: req.parentId,
+        role: "parent",
+        emailOn: true,
+        smsOn: true,
+        pushOn: false,
+      },
+    });
 
     res.json({
-      notifyByEmail: !!parent.notifyByEmail,
-      notifyByDashboard: !!parent.notifyByDashboard,
-      notifyByPush: !!parent.notifyByPush,
+      notifyByEmail: !!preferences.emailOn,
+      notifyByDashboard: !!preferences.smsOn,
+      notifyByPush: !!preferences.pushOn,
     });
   } catch (error) {
     console.error("Fetch notification preferences error:", error);
@@ -857,6 +927,11 @@ router.patch("/preferences/notifications", parentAuth, async (req, res) => {
     const parent = await ParentUser.findByPk(req.parentId);
     if (!parent) return res.status(404).json({ message: "Parent not found" });
 
+    const [preferences] = await NotificationPreference.findOrCreate({
+      where: { userId: req.parentId, role: "parent" },
+      defaults: { userId: req.parentId, role: "parent" },
+    });
+
     const nextNotifyByEmail = toBoolean(req.body.notifyByEmail, !!parent.notifyByEmail);
     const nextNotifyByDashboard = toBoolean(req.body.notifyByDashboard, !!parent.notifyByDashboard);
     const nextNotifyByPush = toBoolean(req.body.notifyByPush, !!parent.notifyByPush);
@@ -867,16 +942,275 @@ router.patch("/preferences/notifications", parentAuth, async (req, res) => {
       notifyByPush: nextNotifyByPush,
     });
 
+    await preferences.update({
+      emailOn: nextNotifyByEmail,
+      smsOn: nextNotifyByDashboard,
+      pushOn: nextNotifyByPush,
+    });
+
     res.json({
       message: "Notification preferences updated",
       preferences: {
-        notifyByEmail: !!parent.notifyByEmail,
-        notifyByDashboard: !!parent.notifyByDashboard,
-        notifyByPush: !!parent.notifyByPush,
+        notifyByEmail: !!nextNotifyByEmail,
+        notifyByDashboard: !!nextNotifyByDashboard,
+        notifyByPush: !!nextNotifyByPush,
       },
     });
   } catch (error) {
     console.error("Update notification preferences error:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.get("/profile", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+    return res.json({ parent: toParentPayload(parent) });
+  } catch (error) {
+    console.error("Fetch parent profile error:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.patch("/profile", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+
+    const nextName = String(req.body?.name || parent.name).trim();
+    const nextEmail = normalizeEmail(req.body?.email || parent.email);
+    const nextPhone = req.body?.phone == null ? parent.phone : normalizePhone(req.body.phone);
+
+    if (!nextName) return res.status(400).json({ message: "Name is required" });
+    if (!nextEmail || !isValidEmail(nextEmail)) {
+      return res.status(400).json({ message: "Valid email is required" });
+    }
+
+    if (nextEmail !== parent.email) {
+      return res.status(400).json({ message: "Use contact verification flow to change email." });
+    }
+
+    if ((nextPhone || "") !== (parent.phone || "")) {
+      return res.status(400).json({ message: "Use contact verification flow to change phone." });
+    }
+
+    await parent.update({ name: nextName });
+    return res.json({ message: "Profile updated", parent: toParentPayload(parent) });
+  } catch (error) {
+    console.error("Update parent profile error:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.post("/contact/send-code", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+
+    const channel = String(req.body?.channel || "").trim().toLowerCase();
+    const purpose = String(req.body?.purpose || "initial").trim().toLowerCase();
+    const requestedTarget = String(req.body?.target || "").trim();
+
+    if (!["email", "phone"].includes(channel)) {
+      return res.status(400).json({ message: "channel must be email or phone" });
+    }
+
+    const isEmail = channel === "email";
+    const currentTarget = isEmail ? parent.email : (parent.phone || "");
+    let target = requestedTarget || currentTarget;
+    if (isEmail) target = normalizeEmail(target);
+    else target = normalizePhone(target);
+
+    if (!target) return res.status(400).json({ message: `${channel} is required` });
+    if (isEmail && !isValidEmail(target)) return res.status(400).json({ message: "Enter a valid email" });
+    if (!isEmail && !isValidPhone(target)) return res.status(400).json({ message: "Enter a valid phone" });
+
+    const now = new Date();
+    if (purpose === "change-current" && target !== currentTarget) {
+      return res.status(400).json({ message: `Current ${channel} does not match profile` });
+    }
+
+    if (purpose === "change-new") {
+      const canChangeUntil = isEmail ? parent.canChangeEmailUntil : parent.canChangePhoneUntil;
+      if (!canChangeUntil || new Date(canChangeUntil) < now) {
+        return res.status(400).json({ message: `Verify current ${channel} first` });
+      }
+      if (target === currentTarget) {
+        return res.status(400).json({ message: `New ${channel} must be different` });
+      }
+    }
+
+    const code = generateOtpCode();
+    const expiresAt = getOtpExpiryDate();
+    const updatePayload = isEmail
+      ? { emailOtpCode: code, emailOtpTarget: target, emailOtpPurpose: purpose, emailOtpExpiresAt: expiresAt }
+      : { phoneOtpCode: code, phoneOtpTarget: target, phoneOtpPurpose: purpose, phoneOtpExpiresAt: expiresAt };
+
+    await parent.update(updatePayload);
+
+    const message = `Your verification code is ${code}. It expires in 10 minutes.`;
+    let delivery;
+    if (isEmail) {
+      delivery = await sendEmail({ to: target, subject: "SkillSpring parent verification code", text: message });
+    } else {
+      delivery = await sendSms({ to: target, text: message });
+    }
+
+    return res.json({
+      message:
+        delivery?.delivered === false
+          ? `Verification code generated for ${channel}, but delivery is not configured yet.`
+          : `Verification code sent to ${channel}`,
+      channel,
+      purpose,
+      target,
+      expiresAt,
+      delivery,
+      devCode:
+        process.env.ALLOW_DEV_OTP_ECHO === "true" || delivery?.delivered === false ? code : undefined,
+    });
+  } catch (error) {
+    console.error("Parent send contact code error:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.post("/contact/verify-code", parentAuth, async (req, res) => {
+  try {
+    const parent = await ParentUser.findByPk(req.parentId);
+    if (!parent) return res.status(404).json({ message: "Parent not found" });
+
+    const channel = String(req.body?.channel || "").trim().toLowerCase();
+    const code = String(req.body?.code || "").trim();
+    const purpose = String(req.body?.purpose || "initial").trim().toLowerCase();
+
+    if (!["email", "phone"].includes(channel)) return res.status(400).json({ message: "Invalid channel" });
+    if (!code) return res.status(400).json({ message: "Verification code is required" });
+
+    const isEmail = channel === "email";
+    const otpCode = isEmail ? parent.emailOtpCode : parent.phoneOtpCode;
+    const otpTarget = isEmail ? parent.emailOtpTarget : parent.phoneOtpTarget;
+    const otpPurpose = isEmail ? parent.emailOtpPurpose : parent.phoneOtpPurpose;
+    const otpExpiry = isEmail ? parent.emailOtpExpiresAt : parent.phoneOtpExpiresAt;
+
+    if (!otpCode || !otpTarget || !otpExpiry) return res.status(400).json({ message: "No active verification request" });
+    if (otpCode !== code) return res.status(400).json({ message: "Invalid verification code" });
+    if (new Date(otpExpiry) < new Date()) return res.status(400).json({ message: "Verification code expired" });
+    if (otpPurpose !== purpose) return res.status(400).json({ message: "Verification purpose mismatch" });
+
+    const clearOtp = isEmail
+      ? { emailOtpCode: null, emailOtpTarget: null, emailOtpPurpose: null, emailOtpExpiresAt: null }
+      : { phoneOtpCode: null, phoneOtpTarget: null, phoneOtpPurpose: null, phoneOtpExpiresAt: null };
+
+    const applyPayload = { ...clearOtp };
+
+    if (purpose === "initial") {
+      if (isEmail) {
+        applyPayload.email = normalizeEmail(otpTarget);
+        applyPayload.emailVerified = true;
+      } else {
+        applyPayload.phone = normalizePhone(otpTarget);
+        applyPayload.phoneVerified = true;
+      }
+    } else if (purpose === "change-current") {
+      const unlockUntil = new Date(Date.now() + 10 * 60 * 1000);
+      if (isEmail) applyPayload.canChangeEmailUntil = unlockUntil;
+      else applyPayload.canChangePhoneUntil = unlockUntil;
+    } else if (purpose === "change-new") {
+      if (isEmail) {
+        if (!parent.canChangeEmailUntil || new Date(parent.canChangeEmailUntil) < new Date()) {
+          return res.status(400).json({ message: "Current email verification expired" });
+        }
+        const existingParent = await ParentUser.findOne({
+          where: {
+            id: { [Op.ne]: parent.id },
+            [Op.or]: [where(fn("lower", col("email")), normalizeEmail(otpTarget))],
+          },
+        });
+        if (existingParent) {
+          return res.status(400).json({ message: "Email already in use" });
+        }
+        applyPayload.email = normalizeEmail(otpTarget);
+        applyPayload.emailVerified = true;
+        applyPayload.canChangeEmailUntil = null;
+      } else {
+        if (!parent.canChangePhoneUntil || new Date(parent.canChangePhoneUntil) < new Date()) {
+          return res.status(400).json({ message: "Current phone verification expired" });
+        }
+        applyPayload.phone = normalizePhone(otpTarget);
+        applyPayload.phoneVerified = true;
+        applyPayload.canChangePhoneUntil = null;
+      }
+    }
+
+    await parent.update(applyPayload);
+    return res.json({ message: `${channel} verification successful`, parent: toParentPayload(parent) });
+  } catch (error) {
+    console.error("Parent verify contact code error:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+});
+
+router.post("/student/live-session/activity", studentAuth, async (req, res) => {
+  try {
+    const { message, action = "suggested", kind = "suggestion", metadata = null } = req.body || {};
+    const cleanMessage = String(message || "").trim();
+
+    if (!cleanMessage) {
+      return res.status(400).json({ message: "Missing live session message" });
+    }
+
+    let session = await LiveSessionActivity.findOne({
+      where: { studentId: req.userId, status: { [Op.in]: ["active", "inactive"] } },
+      order: [["createdAt", "DESC"]],
+    });
+
+    if (!session) {
+      session = await LiveSessionActivity.findOne({
+        where: { studentId: req.userId },
+        order: [["createdAt", "DESC"]],
+      });
+    }
+
+    if (!session) {
+      const parsedSessionId = Number(metadata?.sessionId || 0);
+      const safeStudySessionId = Number.isFinite(parsedSessionId) && parsedSessionId > 0 ? parsedSessionId : null;
+
+      session = await LiveSessionActivity.create({
+        studentId: req.userId,
+        studySessionId: safeStudySessionId,
+        joinTime: new Date(),
+        lastActiveAt: new Date(),
+        leaveTime: new Date(),
+        status: "ended",
+        activityLog: "[]",
+      });
+    }
+
+    const entry = {
+      message: cleanMessage,
+      action: String(action || "suggested"),
+      kind: String(kind || "suggestion"),
+      metadata: metadata || null,
+      timestamp: new Date().toISOString(),
+    };
+
+    const currentLog = parseJsonArray(session.activityLog);
+    const activityLog = [...currentLog, entry].slice(-100);
+
+    await session.update({
+      activityLog: JSON.stringify(activityLog),
+    });
+
+    res.json({
+      message: "Live session activity saved",
+      entry,
+      activityLog,
+      session,
+    });
+  } catch (error) {
+    console.error("Live session activity error:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 });

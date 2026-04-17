@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   endLiveSessionTracking,
   heartbeatLiveSessionTracking,
+  saveLiveSessionActivity,
   startLiveSessionTracking,
 } from "../../services/api";
 import {
@@ -227,6 +228,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
   const lastMoodRef = useRef("Unknown");
   const audioContextRef = useRef(null);
   const alarmIntervalRef = useRef(null);
+  const alarmModeRef = useRef("normal");
   const drowsyConsecutiveRef = useRef(0);
   const awakeConsecutiveRef = useRef(0);
   const drowsyEmaRef = useRef(null);
@@ -345,7 +347,39 @@ function LiveFaceStudySession({ studentContext = {} }) {
     }
   }, []);
 
-  const playWakeTone = useCallback(() => {
+  const recordLiveSuggestion = useCallback(async (message, action, kind = "suggestion", metadata = null) => {
+    if (!message) return;
+
+    try {
+      await saveLiveSessionActivity({ message, action, kind, metadata });
+    } catch (error) {
+      console.warn("Could not save live session activity:", error);
+    }
+  }, []);
+
+  const primeAlarmAudio = useCallback(async () => {
+    try {
+      if (!soundEnabled) return false;
+
+      const ContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!ContextClass) return false;
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new ContextClass();
+      }
+
+      if (audioContextRef.current.state === "suspended") {
+        await audioContextRef.current.resume();
+      }
+
+      return true;
+    } catch (audioError) {
+      console.warn("Audio unlock failed:", audioError);
+      return false;
+    }
+  }, [soundEnabled]);
+
+  const playWakeTone = useCallback((mode = "normal") => {
     if (!soundEnabled) return;
 
     try {
@@ -362,18 +396,23 @@ function LiveFaceStudySession({ studentContext = {} }) {
       }
       const now = ctx.currentTime;
 
-      [0, 0.18, 0.36].forEach((offset, idx) => {
+      const isSleepAlarm = mode === "sleep";
+      const frequencies = isSleepAlarm ? [1320, 1080, 1320, 880] : [980, 820, 660];
+      const gainValue = isSleepAlarm ? 0.9 : 0.28;
+
+      frequencies.forEach((frequency, idx) => {
+        const offset = idx * (isSleepAlarm ? 0.12 : 0.18);
         const oscillator = ctx.createOscillator();
         const gain = ctx.createGain();
-        oscillator.type = idx % 2 === 0 ? "triangle" : "square";
-        oscillator.frequency.setValueAtTime(980 - (idx * 160), now + offset);
+        oscillator.type = isSleepAlarm ? "square" : (idx % 2 === 0 ? "triangle" : "square");
+        oscillator.frequency.setValueAtTime(frequency, now + offset);
         gain.gain.setValueAtTime(0.0001, now + offset);
-        gain.gain.exponentialRampToValueAtTime(0.28, now + offset + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.14);
+        gain.gain.exponentialRampToValueAtTime(gainValue, now + offset + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + (isSleepAlarm ? 0.1 : 0.14));
         oscillator.connect(gain);
         gain.connect(ctx.destination);
         oscillator.start(now + offset);
-        oscillator.stop(now + offset + 0.16);
+        oscillator.stop(now + offset + (isSleepAlarm ? 0.12 : 0.16));
       });
     } catch (audioError) {
       console.warn("Wake tone failed:", audioError);
@@ -385,16 +424,18 @@ function LiveFaceStudySession({ studentContext = {} }) {
       window.clearInterval(alarmIntervalRef.current);
       alarmIntervalRef.current = null;
     }
+    alarmModeRef.current = "normal";
     setIsAlarmActive(false);
   }, []);
 
-  const startDrowsyAlarm = useCallback(() => {
+  const startDrowsyAlarm = useCallback((mode = "normal") => {
     if (!soundEnabled || alarmIntervalRef.current) return;
 
-    playWakeTone();
+    alarmModeRef.current = mode;
+    playWakeTone(mode);
     alarmIntervalRef.current = window.setInterval(() => {
-      playWakeTone();
-    }, 1200);
+      playWakeTone(alarmModeRef.current);
+    }, mode === "sleep" ? 650 : 1200);
     setIsAlarmActive(true);
   }, [playWakeTone, soundEnabled]);
 
@@ -554,13 +595,14 @@ function LiveFaceStudySession({ studentContext = {} }) {
 
       if (response?.message) {
         setLastSuggestion(response.message);
+        recordLiveSuggestion(response.message, "suggested", "suggestion", { reason });
       }
     } catch (suggestionError) {
       console.error("Live suggestion error:", suggestionError);
     } finally {
       suggestionInFlightRef.current = false;
     }
-  }, [buildSessionSnapshot, studentContext]);
+  }, [buildSessionSnapshot, recordLiveSuggestion, studentContext]);
 
   const runFaceDetection = async () => {
     if (!videoRef.current || !detectorRef.current || videoRef.current.readyState < 2) {
@@ -621,6 +663,8 @@ function LiveFaceStudySession({ studentContext = {} }) {
             inferredState.fatigueScore >= SLEEP_FATIGUE_THRESHOLD ||
             inferredState.moodTag === "Sleepy";
 
+          const isSleepyState = inferredState.moodTag === "Sleepy" || inferredState.fatigueScore >= SLEEP_FATIGUE_THRESHOLD;
+
           if (shouldTriggerDrowsyAlarm) {
             drowsyConsecutiveRef.current += 1;
             awakeConsecutiveRef.current = 0;
@@ -630,11 +674,18 @@ function LiveFaceStudySession({ studentContext = {} }) {
           }
 
           if (drowsyConsecutiveRef.current >= DROWSY_PERSIST_FRAMES) {
-            startDrowsyAlarm();
+            startDrowsyAlarm(isSleepyState ? "sleep" : "normal");
 
             if (now - lastDrowsySuggestionAtRef.current > ALERT_COOLDOWN_MS) {
               lastDrowsySuggestionAtRef.current = now;
-              createLiveAlert("Persistent drowsiness detected. Continuous wake alarm active.", "critical", "drowsy", true);
+              createLiveAlert(
+                isSleepyState
+                  ? "Sleeping detected. Loud wake alarm active."
+                  : "Persistent drowsiness detected. Continuous wake alarm active.",
+                "critical",
+                "drowsy",
+                true
+              );
               fetchSuggestion("drowsy_detected");
             }
           }
@@ -737,6 +788,8 @@ function LiveFaceStudySession({ studentContext = {} }) {
     }
 
     try {
+      await primeAlarmAudio();
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
@@ -925,6 +978,20 @@ function LiveFaceStudySession({ studentContext = {} }) {
     };
   }, [stopCamera]);
 
+  const handleSoundToggle = useCallback(() => {
+    setSoundEnabled((prev) => {
+      const nextEnabled = !prev;
+
+      if (nextEnabled) {
+        primeAlarmAudio().catch(() => {});
+      } else {
+        stopDrowsyAlarm();
+      }
+
+      return nextEnabled;
+    });
+  }, [primeAlarmAudio, stopDrowsyAlarm]);
+
   const renderTrendTag = (delta) => {
     if (delta >= 8) return "↗ rising";
     if (delta <= -8) return "↘ improving";
@@ -949,7 +1016,7 @@ function LiveFaceStudySession({ studentContext = {} }) {
             Stop Session
           </button>
         )}
-        <button className="live-face-sound-btn" onClick={() => setSoundEnabled((prev) => !prev)}>
+        <button className="live-face-sound-btn" onClick={handleSoundToggle}>
           {soundEnabled ? "🔔 Sound On" : "🔕 Sound Off"}
         </button>
         {isAlarmActive && <span className="live-face-alarm-chip">⚠ Drowsy Alarm Active</span>}

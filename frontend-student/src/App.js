@@ -11,9 +11,10 @@ import "./App.css";
 
 function App() {
   const initialHash = window.location.hash.replace("#", "");
-  const initialType = initialHash.includes("parent") ? "parent" : "student";
+  const initialPath = window.location.pathname.replace(/\/+$/, "") || "/";
+  const initialType = initialPath.startsWith("/parent") || initialHash.includes("parent") ? "parent" : "student";
   const [currentPage, setCurrentPage] = useState(
-    initialHash.startsWith("signup") ? "signup" : "login"
+    initialHash.startsWith("signup") ? "signup" : initialPath.startsWith("/parent") ? "login" : "login"
   );
   const [authViewAccountType, setAuthViewAccountType] = useState(initialType);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -104,6 +105,9 @@ function App() {
     setIsAuthenticated(false);
     setAuthRole("student");
     setCurrentPage("login");
+    if (window.location.pathname.startsWith("/parent")) {
+      window.history.replaceState({}, "", "/parent");
+    }
   };
 
   let pageContent;
@@ -135,12 +139,15 @@ function App() {
     );
   }
 
+  // Only show chatbot on authenticated dashboard/analytics pages (not on login/signup)
+  const shouldShowChatbot = isAuthenticated && !["login", "signup"].includes(currentPage);
+
   return (
     <div className="app-shell">
         <ErrorBoundary>
           <main className="app-main-content">{pageContent}</main>
         </ErrorBoundary>
-      <AIChatbot />
+      {shouldShowChatbot && <AIChatbot />}
     </div>
   );
 }

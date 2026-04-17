@@ -1,5 +1,17 @@
 const NOTIF_KEY = "appNotifications";
 
+const readNotifications = () => {
+  try {
+    const raw = localStorage.getItem(NOTIF_KEY);
+    if (!raw) return [];
+
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
 export const requestNotificationPermission = async () => {
   if (!("Notification" in window)) return false;
   if (Notification.permission === "granted") return true;
@@ -14,7 +26,7 @@ export const sendBrowserNotification = (title, body, icon = "/logo192.png") => {
 };
 
 export const saveInAppNotification = (title, body, type = "info") => {
-  const existing = JSON.parse(localStorage.getItem(NOTIF_KEY) || "[]");
+  const existing = readNotifications();
   const newNotif = {
     id: Date.now(),
     title,
@@ -29,11 +41,11 @@ export const saveInAppNotification = (title, body, type = "info") => {
 };
 
 export const getInAppNotifications = () => {
-  return JSON.parse(localStorage.getItem(NOTIF_KEY) || "[]");
+  return readNotifications();
 };
 
 export const markAllRead = () => {
-  const notifs = getInAppNotifications();
+  const notifs = readNotifications();
   const updated = notifs.map((n) => ({ ...n, read: true }));
   localStorage.setItem(NOTIF_KEY, JSON.stringify(updated));
   return updated;

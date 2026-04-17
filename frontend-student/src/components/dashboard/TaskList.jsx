@@ -1,44 +1,45 @@
 import React from "react";
 
-function TaskList({ todaysTasks, onToggleTask }) {
-  const totalTasks = todaysTasks.length;
-  const completedCount = todaysTasks.filter((task) => task.completed).length;
-  const progress = totalTasks ? Math.round((completedCount / totalTasks) * 100) : 0;
+function TaskList({ todaysTasks = [], taskCount, onNextTaskClick }) {
+  const totalTasks = typeof taskCount === "number" ? taskCount : todaysTasks.length;
 
   return (
     <article className="widget-dark-card tasks-widget">
-      <h3>Today's Tasks</h3>
+      <div className="tasks-widget-header">
+        <h3>Today's Tasks</h3>
+        <span className="tasks-widget-count">{totalTasks ? `${totalTasks} task${totalTasks === 1 ? "" : "s"}` : "0 tasks"}</span>
+      </div>
       {totalTasks ? (
-        <ul className="task-checklist">
-          {todaysTasks.map((task) => (
-            <li key={task.id}>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={Boolean(task.completed)}
-                  onChange={(event) => onToggleTask(task.id, event.target.checked)}
-                />
-                <span>{task.title}</span>
-              </label>
-              <small>
-                {new Date(task.date).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </small>
-            </li>
-          ))}
+        <ul className="task-agenda-list">
+          {todaysTasks.map((task, index) => {
+            const isNext = index === 0;
+            return (
+              <li key={task.id} className={`task-agenda-item ${isNext ? "next" : ""}`}>
+                <div className="task-agenda-topline">
+                  <strong>{task.title}</strong>
+                  {isNext && (
+                    <button
+                      type="button"
+                      className="task-next-badge task-next-badge-button"
+                      onClick={() => onNextTaskClick?.(task)}
+                      aria-label={`Open next task: ${task.title}`}
+                    >
+                      Next
+                    </button>
+                  )}
+                </div>
+                <div className="task-agenda-meta">
+                  <span>{task.timeLabel || "All day"}</span>
+                  <span className={`task-type-badge type-${task.type}`}>{task.type}</span>
+                  {task.duration ? <span>{task.duration} min</span> : null}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : (
-        <p className="tasks-empty">No data available</p>
+        <p className="tasks-empty">No tasks scheduled for today</p>
       )}
-
-      <div className="task-progress-wrap" aria-hidden="true">
-        <div className="task-progress-track">
-          <div className="task-progress-fill" style={{ width: `${progress}%` }} />
-        </div>
-        <span>{totalTasks ? `${completedCount} of ${totalTasks} tasks done` : "No data available"}</span>
-      </div>
     </article>
   );
 }

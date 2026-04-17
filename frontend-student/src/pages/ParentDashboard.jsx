@@ -1,11 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  completeParentContactSetup,
   getParentAlerts,
   getParentDashboard,
   getParentNotificationPreferences,
+  getParentProfile,
   getParentReports,
   markParentAlertRead,
+  requestParentContactSetup,
+  sendParentContactCode,
+  sendParentNote,
+  updateParentProfile,
   updateParentNotificationPreferences,
+  verifyParentContactCode,
 } from "../services/api";
 import { connectParentSocket, disconnectParentSocket } from "../services/socket";
 import "../styles/ParentDashboard.css";
@@ -54,6 +61,93 @@ const formatAlertDetails = (alert) => {
   return details.join(" | ");
 };
 
+const normalizePhoneForSetup = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (/^\+[1-9]\d{1,14}$/.test(raw)) return raw;
+
+  const digits = raw.replace(/\D/g, "");
+  if (/^\d{10}$/.test(digits)) return `+91${digits}`;
+  if (/^91\d{10}$/.test(digits)) return `+${digits}`;
+
+  return raw;
+};
+
+function ParentSetupModal({
+  open,
+  form,
+  verification,
+  loading,
+  onChange,
+  onRequestOtp,
+  onComplete,
+}) {
+  if (!open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0, 0, 0, 0.62)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 3000,
+        padding: 16,
+      }}
+    >
+      <div className="panel" style={{ width: "min(720px, 100%)" }}>
+        <h2>Complete Parent Contact Setup</h2>
+        <p>Verify your name, student ID, email, and phone to activate parent notifications.</p>
+
+        <div className="command-actions" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <input
+            type="text"
+            placeholder="Full name"
+            value={form.name}
+            onChange={(e) => onChange("name", e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="Student ID"
+            value={form.studentId}
+            onChange={(e) => onChange("studentId", e.target.value)}
+          />
+          <input
+            type="email"
+            placeholder="Email"
+            value={form.email}
+            onChange={(e) => onChange("email", e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="Email OTP"
+            value={form.emailOtp}
+            onChange={(e) => onChange("emailOtp", e.target.value)}
+            autoComplete="one-time-code"
+            inputMode="numeric"
+          />
+        </div>
+
+        <div className="command-actions" style={{ marginTop: 14 }}>
+          <button className="parent-btn mark subtle" onClick={onRequestOtp} disabled={loading}>
+            {loading ? "Sending..." : "Send Email Code"}
+          </button>
+          <button
+            className="parent-btn mark"
+            onClick={onComplete}
+            disabled={loading || !verification.emailVerificationId}
+          >
+            {loading ? "Saving..." : "Complete Setup"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ParentDashboard({ onLogout }) {
   const [data, setData] = useState(null);
   const [alerts, setAlerts] = useState([]);
@@ -76,6 +170,27 @@ function ParentDashboard({ onLogout }) {
     notifyByDashboard: true,
     notifyByPush: false,
   });
+  const [parentProfile, setParentProfile] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    emailVerified: false,
+    phoneVerified: false,
+  });
+  const [parentNameDraft, setParentNameDraft] = useState("");
+  const [parentSetupOpen, setParentSetupOpen] = useState(false);
+  const [parentSetupLoading, setParentSetupLoading] = useState(false);
+  const [parentSetupVerification, setParentSetupVerification] = useState({
+    emailVerificationId: null,
+  });
+  const [parentSetupForm, setParentSetupForm] = useState({
+    name: "",
+    studentId: "",
+    email: "",
+    emailOtp: "",
+  });
+  const [parentNote, setParentNote] = useState("");
+  const [sendingParentNote, setSendingParentNote] = useState(false);
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const hasLoadedOnceRef = useRef(false);
@@ -189,6 +304,40 @@ function ParentDashboard({ onLogout }) {
 
     loadPreferences();
   }, []);
+
+  useEffect(() => {
+    const loadParentProfile = async () => {
+      try {
+        const result = await getParentProfile();
+        const profile = result?.parent || {};
+        setParentProfile({
+          name: profile?.name || "",
+          email: profile?.email || "",
+          phone: profile?.phone || "",
+          emailVerified: Boolean(profile?.emailVerified),
+          phoneVerified: Boolean(profile?.phoneVerified),
+        });
+        setParentNameDraft(profile?.name || "");
+
+        const needsSetup =
+          !profile?.name ||
+          !profile?.email ||
+          !profile?.emailVerified;
+
+        setParentSetupOpen(Boolean(needsSetup));
+        setParentSetupForm((prev) => ({
+          ...prev,
+          name: profile?.name || prev.name,
+          studentId: String(profile?.linkedStudentId || data?.student?.studentId || prev.studentId || ""),
+          email: profile?.email || prev.email,
+        }));
+      } catch (err) {
+        console.error("Unable to load parent profile", err);
+      }
+    };
+
+    loadParentProfile();
+  }, [data?.student?.studentId]);
 
   useEffect(() => {
     if (!data?.student?.id) return undefined;
@@ -347,6 +496,179 @@ function ParentDashboard({ onLogout }) {
     }
   };
 
+  const saveParentName = async () => {
+    const trimmedName = String(parentNameDraft || "").trim();
+    if (!trimmedName) {
+      alert("Name is required.");
+      return;
+    }
+
+    try {
+      const result = await updateParentProfile({ name: trimmedName });
+      const profile = result?.parent || {};
+      setParentProfile((prev) => ({
+        ...prev,
+        name: profile?.name || trimmedName,
+      }));
+      setParentNameDraft(profile?.name || trimmedName);
+      alert("Profile updated.");
+    } catch (err) {
+      alert(`Could not update parent profile: ${err.message}`);
+    }
+  };
+
+  const runParentContactFlow = async ({ channel, mode = "initial" }) => {
+    const currentValue = channel === "email" ? parentProfile.email : parentProfile.phone;
+
+    if (mode === "initial") {
+      const target =
+        currentValue ||
+        window.prompt(`Enter your ${channel} to verify:`) ||
+        "";
+      if (!target) return;
+
+      await sendParentContactCode({ channel, purpose: "initial", target });
+      const code = window.prompt(
+        `Enter code sent to ${target}`
+      );
+      if (!code) return;
+      const verified = await verifyParentContactCode({ channel, purpose: "initial", code: code.trim() });
+      const profile = verified?.parent || {};
+      setParentProfile((prev) => ({
+        ...prev,
+        email: profile?.email || prev.email,
+        phone: profile?.phone || prev.phone,
+        emailVerified: Boolean(profile?.emailVerified),
+        phoneVerified: Boolean(profile?.phoneVerified),
+      }));
+      return;
+    }
+
+    const newTarget = window.prompt(`Enter new ${channel}:`);
+    if (!newTarget) return;
+
+    await sendParentContactCode({
+      channel,
+      purpose: "change-current",
+      target: currentValue,
+    });
+    const currentCode = window.prompt(
+      `Enter code sent to current ${channel}: ${currentValue}`
+    );
+    if (!currentCode) return;
+    await verifyParentContactCode({ channel, purpose: "change-current", code: currentCode.trim() });
+
+    await sendParentContactCode({
+      channel,
+      purpose: "change-new",
+      target: newTarget,
+    });
+    const newCode = window.prompt(
+      `Enter code sent to new ${channel}: ${newTarget}`
+    );
+    if (!newCode) return;
+    const verified = await verifyParentContactCode({ channel, purpose: "change-new", code: newCode.trim() });
+    const profile = verified?.parent || {};
+    setParentProfile((prev) => ({
+      ...prev,
+      email: profile?.email || prev.email,
+      phone: profile?.phone || prev.phone,
+      emailVerified: Boolean(profile?.emailVerified),
+      phoneVerified: Boolean(profile?.phoneVerified),
+    }));
+  };
+
+  const handleParentSetupChange = (field, value) => {
+    setParentSetupForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleParentSetupRequest = async () => {
+    setParentSetupLoading(true);
+    try {
+      const response = await requestParentContactSetup({
+        name: parentSetupForm.name,
+        studentId: parentSetupForm.studentId,
+        email: parentSetupForm.email,
+      });
+
+      const verificationIds = Array.isArray(response?.verificationIds)
+        ? response.verificationIds
+        : [];
+
+      setParentSetupVerification({
+        emailVerificationId:
+          verificationIds.find((item) => item.type === "email")?.verificationId || null,
+      });
+      alert("Email code sent");
+    } catch (err) {
+      alert(err.message || "Unable to send verification codes");
+    } finally {
+      setParentSetupLoading(false);
+    }
+  };
+
+  const handleParentSetupComplete = async () => {
+    if (!parentSetupVerification.emailVerificationId) {
+      alert("Please request the email code first.");
+      return;
+    }
+
+    const emailOtp = String(parentSetupForm.emailOtp || "").trim();
+
+    if (!emailOtp) {
+      alert("Please enter the email OTP.");
+      return;
+    }
+
+    setParentSetupLoading(true);
+    try {
+      const result = await completeParentContactSetup({
+        name: parentSetupForm.name,
+        studentId: parentSetupForm.studentId,
+        email: parentSetupForm.email,
+        emailVerificationId: parentSetupVerification.emailVerificationId,
+        emailOtp,
+      });
+
+      const profile = result?.parent || {};
+      setParentProfile((prev) => ({
+        ...prev,
+        name: profile?.name || parentSetupForm.name || prev.name,
+        email: profile?.email || parentSetupForm.email || prev.email,
+        emailVerified: true,
+      }));
+      setParentNameDraft(profile?.name || parentSetupForm.name || "");
+      setParentSetupOpen(false);
+      alert("Parent setup completed.");
+    } catch (err) {
+      alert(err.message || "Unable to complete setup");
+    } finally {
+      setParentSetupLoading(false);
+    }
+  };
+
+  const handleSendParentNote = async () => {
+    const message = String(parentNote || "").trim();
+    if (!message) {
+      alert("Enter a note first.");
+      return;
+    }
+
+    setSendingParentNote(true);
+    try {
+      await sendParentNote({
+        studentId: data?.student?.id,
+        message,
+      });
+      setParentNote("");
+      alert("Note sent to student.");
+    } catch (err) {
+      alert(err.message || "Could not send note");
+    } finally {
+      setSendingParentNote(false);
+    }
+  };
+
   const exportWeeklyReportCsv = () => {
     if (!reports?.weekly?.length) {
       alert("No weekly report data to export yet.");
@@ -430,6 +752,15 @@ function ParentDashboard({ onLogout }) {
 
   return (
     <div className="parent-dashboard">
+      <ParentSetupModal
+        open={parentSetupOpen}
+        form={parentSetupForm}
+        verification={parentSetupVerification}
+        loading={parentSetupLoading}
+        onChange={handleParentSetupChange}
+        onRequestOtp={handleParentSetupRequest}
+        onComplete={handleParentSetupComplete}
+      />
       <div className="parent-glow parent-glow-left" aria-hidden="true" />
       <div className="parent-glow parent-glow-right" aria-hidden="true" />
 
@@ -462,6 +793,37 @@ function ParentDashboard({ onLogout }) {
 
       <section className="parent-command-bar panel">
         <div className="command-title-wrap">
+          <h2>Contact Verification</h2>
+          <p>Keep parent email and phone verified for real notifications.</p>
+        </div>
+        <div className="command-actions" style={{ gap: 10, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            value={parentNameDraft}
+            onChange={(e) => setParentNameDraft(e.target.value)}
+            placeholder="Parent name"
+            style={{ minWidth: 180 }}
+          />
+          <button className="parent-btn mark subtle" onClick={saveParentName}>Save Name</button>
+          <button className="parent-btn mark subtle" onClick={() => runParentContactFlow({ channel: "email", mode: "initial" })}>
+            {parentProfile.emailVerified ? "Reverify Email" : "Verify Email"}
+          </button>
+          <button className="parent-btn mark subtle" onClick={() => runParentContactFlow({ channel: "phone", mode: "initial" })}>
+            {parentProfile.phoneVerified ? "Reverify Phone" : "Verify Phone"}
+          </button>
+          <button className="parent-btn mark" onClick={() => runParentContactFlow({ channel: "email", mode: "change" })}>
+            Change Email
+          </button>
+          <button className="parent-btn mark" onClick={() => runParentContactFlow({ channel: "phone", mode: "change" })}>
+            Change Phone
+          </button>
+          <span className="hero-chip">Email: {parentProfile.email || "Not set"} {parentProfile.emailVerified ? "(verified)" : "(unverified)"}</span>
+          <span className="hero-chip">Phone: {parentProfile.phone || "Not set"} {parentProfile.phoneVerified ? "(verified)" : "(unverified)"}</span>
+        </div>
+      </section>
+
+      <section className="parent-command-bar panel">
+        <div className="command-title-wrap">
           <h2>Command Center</h2>
           <p>Jump directly to the section you need and take immediate action.</p>
         </div>
@@ -483,6 +845,18 @@ function ParentDashboard({ onLogout }) {
           </button>
           <button className="parent-btn mark" onClick={exportWeeklyReportCsv}>
             Export Weekly CSV
+          </button>
+        </div>
+        <div className="command-actions" style={{ marginTop: 10, alignItems: "stretch" }}>
+          <textarea
+            value={parentNote}
+            onChange={(e) => setParentNote(e.target.value)}
+            placeholder="Write a short motivational note to your student"
+            rows={3}
+            style={{ minWidth: 280, flex: 1 }}
+          />
+          <button className="parent-btn mark" onClick={handleSendParentNote} disabled={sendingParentNote}>
+            {sendingParentNote ? "Sending..." : "Send Note"}
           </button>
         </div>
       </section>

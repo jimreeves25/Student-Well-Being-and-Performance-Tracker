@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AssignmentCard from "./AssignmentCard";
 import AssignmentFormModal from "./AssignmentFormModal";
 import SmartSchedulerModal from "./SmartSchedulerModal";
@@ -26,6 +26,8 @@ function AssignmentPlanner({
   deleteAssignment,
   toggleComplete,
   updateProgress,
+  schedulerContext,
+  openSchedulerSignal,
 }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState(null);
@@ -69,6 +71,11 @@ function AssignmentPlanner({
     deleteAssignment(deleteTarget.id);
     setDeleteTarget(null);
   };
+
+  useEffect(() => {
+    if (!openSchedulerSignal) return;
+    setIsSmartSchedulerOpen(true);
+  }, [openSchedulerSignal]);
 
   return (
     <section className="assignment-planner-shell" aria-label="Assignment Planner">
@@ -170,6 +177,7 @@ function AssignmentPlanner({
       <SmartSchedulerModal
         isOpen={isSmartSchedulerOpen}
         assignments={allAssignments}
+        schedulerContext={schedulerContext}
         onClose={() => setIsSmartSchedulerOpen(false)}
       />
 

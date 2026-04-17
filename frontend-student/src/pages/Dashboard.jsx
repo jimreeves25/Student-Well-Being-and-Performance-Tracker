@@ -1,25 +1,39 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   changePasswordAPI,
+  completeStudySession,
+  completeStudentContactSetup,
   getAssignments,
+  getCurrentUserProfile,
   getDailyLogs,
   getDashboardSummary,
+  getNotificationInbox,
+  getNotificationPreferences,
   getParentLinkRequests,
   getStudySessions,
   generateParentLinkCode,
+  createStudySession,
+  markAllNotificationsRead,
+  markNotificationRead,
+  recordUserActivity,
   respondToParentLinkRequest,
+  requestStudentContactSetup,
+  saveLiveSessionActivity,
   saveDailyLog,
+  updateNotificationPreferences,
+  updateCurrentUserProfile,
   updateWellnessPrivacy,
 } from "../services/api";
-import AiCoach from "../components/AiCoach";
 import DashboardCharts from "../components/DashboardCharts";
 import LiveFaceStudySession from "../components/sample/LiveFaceStudySession";
 import Header from "../components/dashboard/Header";
 import MoodTracker from "../components/dashboard/MoodTracker";
+import SmartScheduler from "../components/SmartScheduler";
 import TaskList from "../components/dashboard/TaskList";
 import DashboardGrid from "../components/layout/DashboardGrid";
 import StatsCard from "../components/ui/StatsCard";
 import AssignmentPlanner from "../components/assignments/AssignmentPlanner";
+import MonthlyCalendar from "../components/MonthlyCalendar";
 import { useAssignments } from "../hooks/useAssignments";
 import {
   clearAllNotifications,
@@ -30,24 +44,102 @@ import {
   sendBrowserNotification,
 } from "../utils/notificationService";
 import { loadFromStorage, saveToStorage, setUserData } from "../utils/storage";
-import { updateUserProfile, initializeUserAuth } from "../utils/userAuth";
+import { initializeUserAuth } from "../utils/userAuth";
 import "../styles/Dashboard.css";
 
 const VIEWS = [
   { id: "overview", label: "Overview" },
   { id: "analytics", label: "Analytics" },
   { id: "rewards", label: "Rewards" },
+  { id: "notifications", label: "Notifications" },
   { id: "daily-log", label: "Daily Log" },
   { id: "assignments", label: "Assignments" },
   { id: "sessions", label: "Live Session" },
-  { id: "ai-tools", label: "AI Tools" },
+  { id: "smart-scheduler", label: "AI Smart Scheduler" },
   { id: "settings", label: "Settings" },
 ];
 
 const SETTINGS_NOTIFICATION_PREFS_KEY = "settingsNotificationPrefs";
+const SETTINGS_BEHAVIOR_PREFS_KEY = "settingsBehaviorPrefs";
 const DASHBOARD_SUMMARY_CACHE_PREFIX = "dashboardSummaryCache";
 
 const getDashboardSummaryCacheKey = (userId) => `${DASHBOARD_SUMMARY_CACHE_PREFIX}:${userId || "anonymous"}`;
+
+const DEFAULT_BEHAVIOR_PREFS = {
+  nightStudyNudge: true,
+  weekendAlerts: true,
+  autoBreakReminders: true,
+  reminderTone: "gentle",
+};
+
+const DEFAULT_NOTIFICATION_PREFS = {
+  emailOn: true,
+  dailyLogReminderTime: "21:00",
+};
+
+const DEFAULT_SETTINGS_NOTIFICATION_PREFS = {
+  streakReminders: true,
+  weeklySummary: true,
+  achievementAlerts: true,
+};
+
+const parseTimeToMinutes = (value, fallback = 0) => {
+  const [hours, minutes] = String(value || "").split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return fallback;
+  return Math.max(0, Math.min(24 * 60 - 1, hours * 60 + minutes));
+};
+
+const formatTimeLabel = (value) => {
+  const minutes = parseTimeToMinutes(value, 21 * 60);
+  const hours24 = Math.floor(minutes / 60);
+  const mins = `${minutes % 60}`.padStart(2, "0");
+  const meridiem = hours24 >= 12 ? "PM" : "AM";
+  const hours12 = hours24 % 12 || 12;
+  return `${hours12}:${mins} ${meridiem}`;
+};
+
+function ContactSetupModal({
+  open,
+  form,
+  verification,
+  loading,
+  onChange,
+  onRequestOtp,
+  onComplete,
+  onClose,
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="notification-shell" style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(7, 10, 20, 0.72)" }}>
+      <div className="settings-content-card" style={{ maxWidth: 640, margin: "6vh auto", padding: 24 }}>
+        <h2>Set up your contact details</h2>
+        <p>Verify your college email before continuing.</p>
+        <div className="settings-card-grid">
+          <label className="settings-card-field settings-card-field-full">
+            <span>Email</span>
+            <input type="email" value={form.email} onChange={(event) => onChange("email", event.target.value)} />
+          </label>
+          <label className="settings-card-field settings-card-field-full">
+            <span>Email OTP</span>
+            <input value={form.emailOtp} onChange={(event) => onChange("emailOtp", event.target.value)} autoComplete="one-time-code" inputMode="numeric" />
+          </label>
+        </div>
+        <div className="settings-card-actions" style={{ marginTop: 16 }}>
+          <button type="button" className="settings-card-btn" onClick={onClose} disabled={loading}>
+            Later
+          </button>
+          <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onRequestOtp} disabled={loading}>
+            {loading ? "Sending..." : "Send Email Code"}
+          </button>
+          <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onComplete} disabled={loading || !verification.emailVerificationId}>
+            {loading ? "Saving..." : "Complete setup"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const themes = {
   dark: {
@@ -133,7 +225,51 @@ const toDateKey = (value) => {
   return `${date.getFullYear()}-${month}-${day}`;
 };
 
+function isToday(date) {
+  const parsedDate = new Date(date);
+  return !Number.isNaN(parsedDate.getTime()) && parsedDate.toDateString() === new Date().toDateString();
+}
+
+const getTaskDateValue = (task = {}) => task.deadline || task.dueDate || task.startTime || task.time || task.scheduledDate || task.date;
+
+const formatTaskTime = (value) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "All day";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const normalizePhoneForSetup = (value = "") => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (/^\+[1-9]\d{1,14}$/.test(raw)) return raw;
+
+  const digits = raw.replace(/\D/g, "");
+  if (/^\d{10}$/.test(digits)) return `+91${digits}`;
+  if (/^91\d{10}$/.test(digits)) return `+${digits}`;
+
+  return raw;
+};
+
 const clampPercent = (value) => Math.max(0, Math.min(100, Math.round(value)));
+
+const moodValueToEmoji = {
+  1: "😞",
+  2: "😐",
+  3: "🙂",
+  4: "😄",
+  5: "🤩",
+};
+
+const moodRatingToMoodValue = (rating) => {
+  const safe = Number.isFinite(Number(rating)) ? Number(rating) : 0;
+  return Math.max(1, Math.min(5, Math.round(safe / 2)));
+};
+
+const moodValueToMoodRating = (moodValue) => {
+  const safe = Number.isFinite(Number(moodValue)) ? Number(moodValue) : 3;
+  return Math.max(1, Math.min(10, Math.round(safe * 2)));
+};
 
 const calculateWellnessScoreFromMoodLogs = (recentLogs) => {
   const today = new Date();
@@ -443,6 +579,7 @@ function SettingsView({
   onFieldChange,
   onProfilePictureChange,
   onSave,
+  isSaving,
   onChangePassword,
   onThemeCardSelect,
   themeMode,
@@ -452,6 +589,14 @@ function SettingsView({
   onNotificationToggle,
   notificationPrefs,
   onNotificationPrefToggle,
+  backendNotificationPrefs,
+  onBackendNotificationPrefChange,
+  onSaveBackendNotificationPrefs,
+  isSavingBackendNotificationPrefs,
+  behaviorPrefs,
+  onBehaviorPrefChange,
+  onResetDefaults,
+  onExportSettings,
   parentCode,
   parentRequests,
   allowWellnessShare,
@@ -473,6 +618,7 @@ function SettingsView({
     newPassword: false,
     confirmPassword: false,
   });
+
   const fileInputRef = useRef(null);
 
   const userName = settings.username?.trim() || "Student";
@@ -531,72 +677,80 @@ function SettingsView({
     </button>
   );
 
+
+
   return (
     <section className="settings-page-shell" aria-label="Settings page">
       <h1 className="settings-page-title">Settings</h1>
-
       <div className="settings-page-layout">
         <aside className="settings-page-sidebar">
           <button type="button" className="settings-back-btn" onClick={onBackToDashboard}>
             ← Dashboard
           </button>
 
-          <div className="settings-sidebar-group">
-            <small>Account</small>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "profile" ? "active" : ""}`}
-              onClick={() => setActiveSection("profile")}
-            >
-              Profile
-            </button>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "security" ? "active" : ""}`}
-              onClick={() => setActiveSection("security")}
-            >
-              Security
-            </button>
-          </div>
+              <div className="settings-sidebar-group">
+                <small>Account and Security</small>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "profile" ? "active" : ""}`}
+                  onClick={() => setActiveSection("profile")}
+                >
+                  Profile
+                </button>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "security" ? "active" : ""}`}
+                  onClick={() => setActiveSection("security")}
+                >
+                  Security
+                </button>
+              </div>
 
-          <div className="settings-sidebar-group">
-            <small>App Settings</small>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "preferences" ? "active" : ""}`}
-              onClick={() => setActiveSection("preferences")}
-            >
-              Preferences
-            </button>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "notifications" ? "active" : ""}`}
-              onClick={() => setActiveSection("notifications")}
-            >
-              Notifications
-            </button>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "parent-controls" ? "active" : ""}`}
-              onClick={() => setActiveSection("parent-controls")}
-            >
-              Parent Controls
-            </button>
-          </div>
+              <div className="settings-sidebar-group">
+                <small>Experience</small>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "preferences" ? "active" : ""}`}
+                  onClick={() => setActiveSection("preferences")}
+                >
+                  Appearance
+                </button>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "notifications" ? "active" : ""}`}
+                  onClick={() => setActiveSection("notifications")}
+                >
+                  Notifications
+                </button>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "behavior" ? "active" : ""}`}
+                  onClick={() => setActiveSection("behavior")}
+                >
+                  Behavior and Reminders
+                </button>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "parent-controls" ? "active" : ""}`}
+                  onClick={() => setActiveSection("parent-controls")}
+                >
+                  Parent Controls
+                </button>
+              </div>
 
-          <div className="settings-sidebar-group">
-            <small>Danger</small>
-            <button
-              type="button"
-              className={`settings-side-item ${activeSection === "danger" ? "active" : ""}`}
-              onClick={() => setActiveSection("danger")}
-            >
-              Logout
-            </button>
-          </div>
-        </aside>
+              <div className="settings-sidebar-group">
+                <small>Danger</small>
+                <button
+                  type="button"
+                  className={`settings-side-item ${activeSection === "danger" ? "active" : ""}`}
+                  onClick={() => setActiveSection("danger")}
+                >
+                  Logout
+                </button>
+              </div>
+          </aside>
 
-        <div className="settings-page-content">
+          <div className="settings-page-content">
           {activeSection === "profile" && (
             <article className="settings-content-card">
               <h2>Profile</h2>
@@ -630,7 +784,7 @@ function SettingsView({
 
                 <label className="settings-card-field">
                   <span>Email</span>
-                  <input type="email" value={settings.email} onChange={(event) => onFieldChange("email", event.target.value)} />
+                  <input type="email" value={settings.email} readOnly />
                   {validationErrors.email ? <small>{validationErrors.email}</small> : null}
                 </label>
 
@@ -642,8 +796,9 @@ function SettingsView({
               </div>
 
               <div className="settings-card-actions">
-                <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onSave}>
-                  Save
+                <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onSave} disabled={isSaving}>
+                  {isSaving ? <span className="settings-spinner" aria-hidden="true" /> : null}
+                  {isSaving ? "Saving..." : "Save"}
                 </button>
               </div>
             </article>
@@ -757,19 +912,65 @@ function SettingsView({
           {activeSection === "notifications" && (
             <article className="settings-content-card">
               <h2>Notifications</h2>
-              <p>Choose what alerts and summaries you receive.</p>
+              <p>Manage your daily email reminder settings.</p>
 
               <div className="settings-toggle-list">
                 <div className="settings-toggle-row-full">
                   <div>
-                    <strong>Streak reminders</strong>
-                    <p>Remind me to log daily.</p>
+                    <strong>Email notifications</strong>
+                    <p>Enable daily reminders to your registered email address.</p>
                   </div>
                   <button
                     type="button"
-                    className={`settings-pill-toggle ${notificationPrefs.streakReminders ? "on" : ""}`}
-                    onClick={() => onNotificationPrefToggle("streakReminders")}
-                    aria-pressed={notificationPrefs.streakReminders}
+                    className={`settings-pill-toggle ${backendNotificationPrefs.emailOn ? "on" : ""}`}
+                    onClick={() => onBackendNotificationPrefChange("emailOn", !backendNotificationPrefs.emailOn)}
+                    aria-pressed={backendNotificationPrefs.emailOn}
+                  >
+                    <span />
+                  </button>
+                </div>
+
+                <p className="settings-inline-message">
+                  We&rsquo;ll send you a daily reminder at your selected time.
+                </p>
+
+                <div className="settings-card-grid">
+                  <label className="settings-card-field">
+                    <span>Daily log reminder time</span>
+                    <input
+                      type="time"
+                      value={backendNotificationPrefs.dailyLogReminderTime || "21:00"}
+                      onChange={(event) => onBackendNotificationPrefChange("dailyLogReminderTime", event.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="settings-card-actions">
+                  <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onSaveBackendNotificationPrefs} disabled={isSavingBackendNotificationPrefs}>
+                    {isSavingBackendNotificationPrefs ? <span className="settings-spinner" aria-hidden="true" /> : null}
+                    {isSavingBackendNotificationPrefs ? "Saving..." : "Save reminder settings"}
+                  </button>
+                </div>
+              </div>
+            </article>
+          )}
+
+          {activeSection === "behavior" && (
+            <article className="settings-content-card">
+              <h2>Behavior and Reminders</h2>
+              <p>Personalize nudges based on your rhythm and focus windows.</p>
+
+              <div className="settings-toggle-list">
+                <div className="settings-toggle-row-full">
+                  <div>
+                    <strong>Night study nudges</strong>
+                    <p>Suggest focused blocks for your most active evening hours.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className={`settings-pill-toggle ${behaviorPrefs.nightStudyNudge ? "on" : ""}`}
+                    onClick={() => onBehaviorPrefChange("nightStudyNudge", !behaviorPrefs.nightStudyNudge)}
+                    aria-pressed={behaviorPrefs.nightStudyNudge}
                   >
                     <span />
                   </button>
@@ -777,14 +978,14 @@ function SettingsView({
 
                 <div className="settings-toggle-row-full">
                   <div>
-                    <strong>Weekly summary</strong>
-                    <p>Get a weekly wellness report.</p>
+                    <strong>Weekend alerts</strong>
+                    <p>Boost consistency with Saturday and Sunday reminder boosts.</p>
                   </div>
                   <button
                     type="button"
-                    className={`settings-pill-toggle ${notificationPrefs.weeklySummary ? "on" : ""}`}
-                    onClick={() => onNotificationPrefToggle("weeklySummary")}
-                    aria-pressed={notificationPrefs.weeklySummary}
+                    className={`settings-pill-toggle ${behaviorPrefs.weekendAlerts ? "on" : ""}`}
+                    onClick={() => onBehaviorPrefChange("weekendAlerts", !behaviorPrefs.weekendAlerts)}
+                    aria-pressed={behaviorPrefs.weekendAlerts}
                   >
                     <span />
                   </button>
@@ -792,33 +993,35 @@ function SettingsView({
 
                 <div className="settings-toggle-row-full">
                   <div>
-                    <strong>Achievement alerts</strong>
-                    <p>Notify when badge earned.</p>
+                    <strong>Auto break reminders</strong>
+                    <p>Prompt healthy breaks during high focus streaks.</p>
                   </div>
                   <button
                     type="button"
-                    className={`settings-pill-toggle ${notificationPrefs.achievementAlerts ? "on" : ""}`}
-                    onClick={() => onNotificationPrefToggle("achievementAlerts")}
-                    aria-pressed={notificationPrefs.achievementAlerts}
+                    className={`settings-pill-toggle ${behaviorPrefs.autoBreakReminders ? "on" : ""}`}
+                    onClick={() => onBehaviorPrefChange("autoBreakReminders", !behaviorPrefs.autoBreakReminders)}
+                    aria-pressed={behaviorPrefs.autoBreakReminders}
                   >
                     <span />
                   </button>
                 </div>
+              </div>
 
-                <div className="settings-toggle-row-full">
-                  <div>
-                    <strong>Account notifications</strong>
-                    <p>General account updates and reminders.</p>
-                  </div>
-                  <button
-                    type="button"
-                    className={`settings-pill-toggle ${notificationsEnabled ? "on" : ""}`}
-                    onClick={() => onNotificationToggle(!notificationsEnabled)}
-                    aria-pressed={notificationsEnabled}
-                  >
-                    <span />
-                  </button>
-                </div>
+              <label className="settings-card-field settings-card-field-full">
+                <span>Reminder tone</span>
+                <select
+                  value={behaviorPrefs.reminderTone || "gentle"}
+                  onChange={(event) => onBehaviorPrefChange("reminderTone", event.target.value)}
+                >
+                  <option value="gentle">Gentle</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="assertive">Assertive</option>
+                </select>
+              </label>
+
+              <div className="settings-card-actions settings-card-actions-split">
+                <button type="button" className="settings-card-btn" onClick={onResetDefaults}>Reset to Default</button>
+                <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={onExportSettings}>Export Settings (JSON)</button>
               </div>
             </article>
           )}
@@ -899,7 +1102,7 @@ function SettingsView({
               </section>
             </article>
           )}
-        </div>
+          </div>
       </div>
     </section>
   );
@@ -941,17 +1144,41 @@ function Dashboard({ onLogout }) {
   const [parentRequests, setParentRequests] = useState([]);
   const [allowWellnessShare, setAllowWellnessShare] = useState(true);
   const [todayMoodLog, setTodayMoodLog] = useState(null);
-  const [moodLogsAll, setMoodLogsAll] = useState(() => {
+  const [showScheduleAdjustPrompt, setShowScheduleAdjustPrompt] = useState(false);
+  const [schedulerOpenSignal, setSchedulerOpenSignal] = useState(0);
+  const [dismissedSessionIds, setDismissedSessionIds] = useState(() => {
     try {
-      const data = loadFromStorage("moodLogs", []);
-      return Array.isArray(data) ? data : [];
+      const data = loadFromStorage("dismissedSessionIds", []);
+      return Array.isArray(data) ? data.map((value) => String(value)) : [];
     } catch {
       return [];
     }
   });
   const [notifications, setNotifications] = useState(() => getInAppNotifications());
   const [isNotificationPanelOpen, setIsNotificationPanelOpen] = useState(false);
-  const [completedTaskMap, setCompletedTaskMap] = useState({});
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const [accountCreatedAt, setAccountCreatedAt] = useState(null);
+  const [contactSetupOpen, setContactSetupOpen] = useState(false);
+  const [contactSetupLoading, setContactSetupLoading] = useState(false);
+  const [contactSetupVerification, setContactSetupVerification] = useState({
+    emailVerificationId: null,
+  });
+  const [contactSetupForm, setContactSetupForm] = useState({
+    email: "",
+    emailOtp: "",
+  });
+  const [backendNotifications, setBackendNotifications] = useState([]);
+  const [notificationPreferences, setNotificationPreferences] = useState(DEFAULT_NOTIFICATION_PREFS);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSavingBackendNotificationPrefs, setIsSavingBackendNotificationPrefs] = useState(false);
+  const [settingsBehaviorPrefs, setSettingsBehaviorPrefs] = useState(() => {
+    const stored = loadFromStorage(SETTINGS_BEHAVIOR_PREFS_KEY, {});
+    return {
+      ...DEFAULT_BEHAVIOR_PREFS,
+      ...(stored && typeof stored === "object" ? stored : {}),
+    };
+  });
+
   const [settingsErrors, setSettingsErrors] = useState({});
   const [settingsForm, setSettingsForm] = useState({
     username: "",
@@ -960,11 +1187,7 @@ function Dashboard({ onLogout }) {
     profilePicture: "",
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
-  const [settingsNotificationPrefs, setSettingsNotificationPrefs] = useState({
-    streakReminders: true,
-    weeklySummary: true,
-    achievementAlerts: true,
-  });
+  const [settingsNotificationPrefs, setSettingsNotificationPrefs] = useState(DEFAULT_SETTINGS_NOTIFICATION_PREFS);
 
   const [logForm, setLogForm] = useState({
     studyHours: 0,
@@ -1030,32 +1253,142 @@ function Dashboard({ onLogout }) {
 
   useEffect(() => {
     // Initialize user auth system on first mount
-    initializeUserAuth();
+    const authProfile = initializeUserAuth();
 
-    try {
-      const savedUser = loadFromStorage("user", {});
-      const savedSettings = loadFromStorage("userSettings", {});
+    const loadProfile = async () => {
+      let backendProfileLoaded = false;
 
-      setSettingsForm({
-        username: savedSettings.username || savedUser.name || "",
-        email: savedSettings.email || savedUser.email || "",
-        phone: savedSettings.phone || savedUser.phone || "",
-        profilePicture: savedSettings.profilePicture || savedUser.profilePicture || "",
-      });
-      setNotificationsEnabled(Boolean(savedSettings.notificationsEnabled));
+      try {
+        if (authToken) {
+          const profileRes = await getCurrentUserProfile();
+          const profileUser = profileRes?.user || {};
+          backendProfileLoaded = true;
+          setAccountCreatedAt(profileUser?.createdAt || null);
+          setSettingsForm((prev) => ({
+            ...prev,
+            username: profileUser?.name || prev.username,
+            email: profileUser?.email || prev.email,
+            phone: profileUser?.phone || prev.phone,
+            profilePicture: profileUser?.profilePicture || prev.profilePicture,
+          }));
+          if (profileUser?.themeMode) {
+            setThemeMode(profileUser.themeMode);
+          }
+          setNotificationsEnabled(Boolean(profileUser?.notificationsEnabled));
+          if (profileUser?.notificationPrefs && typeof profileUser.notificationPrefs === "object") {
+            setSettingsNotificationPrefs((prev) => ({ ...prev, ...profileUser.notificationPrefs }));
+          }
 
-      const savedNotificationPrefs = loadFromStorage(SETTINGS_NOTIFICATION_PREFS_KEY, null);
-      if (savedNotificationPrefs && typeof savedNotificationPrefs === "object") {
-        setSettingsNotificationPrefs((prev) => ({ ...prev, ...savedNotificationPrefs }));
+          const existingUser = loadFromStorage("user", {});
+          saveToStorage("user", {
+            ...existingUser,
+            ...profileUser,
+          });
+
+          if (profileUser && profileUser.isContactSetup === false) {
+            setContactSetupOpen(true);
+            setContactSetupForm((prev) => ({
+              ...prev,
+              email: profileUser?.email || prev.email,
+            }));
+          } else if (profileUser?.isContactSetup) {
+            setContactSetupOpen(false);
+          }
+        }
+      } catch (error) {
+        console.warn("Could not load backend profile", error);
       }
-    } catch (error) {
-      console.warn("Could not load saved settings", error);
-    }
-  }, []);
+
+      try {
+        const savedUser = loadFromStorage("user", {});
+        const savedSettings = loadFromStorage("userSettings", {});
+        setAccountCreatedAt((prev) => prev || savedUser?.createdAt || authProfile?.createdAt || null);
+
+        if (!backendProfileLoaded) {
+          setSettingsForm((prev) => ({
+            ...prev,
+            username: prev.username || savedSettings.username || savedUser.name || "",
+            email: prev.email || savedSettings.email || savedUser.email || "",
+            phone: prev.phone || savedSettings.phone || savedUser.phone || "",
+            profilePicture:
+              prev.profilePicture || savedSettings.profilePicture || savedUser.profilePicture || "",
+          }));
+          setNotificationsEnabled((prev) => prev || Boolean(savedSettings.notificationsEnabled));
+
+          const savedNotificationPrefs = loadFromStorage(SETTINGS_NOTIFICATION_PREFS_KEY, null);
+          if (savedNotificationPrefs && typeof savedNotificationPrefs === "object") {
+            setSettingsNotificationPrefs((prev) => ({ ...prev, ...savedNotificationPrefs }));
+          }
+        }
+      } catch (error) {
+        console.warn("Could not load saved settings", error);
+      }
+    };
+
+    loadProfile();
+  }, [authToken]);
+
+  useEffect(() => {
+    if (!authToken) return undefined;
+
+    let active = true;
+
+    const syncNotifications = async () => {
+      try {
+        const [inboxResult, preferencesResult] = await Promise.allSettled([
+          getNotificationInbox(),
+          getNotificationPreferences(),
+        ]);
+
+        if (!active) return;
+
+        if (inboxResult.status === "fulfilled") {
+          const inboxNotifications = Array.isArray(inboxResult.value?.notifications)
+            ? inboxResult.value.notifications
+            : [];
+          setBackendNotifications(inboxNotifications);
+          setNotifications((prev) => {
+            const backendIds = new Set(inboxNotifications.map((item) => String(item.id)));
+            const merged = [
+              ...inboxNotifications.map((item) => ({
+                id: item.id,
+                title: item.title || item.type || "Notification",
+                body: item.messagePreview || "",
+                type: item.status === "failed" ? "error" : "info",
+                read: Boolean(item.readAt),
+                createdAt: item.sentAt,
+              })),
+              ...prev.filter((item) => !backendIds.has(String(item.id))),
+            ];
+            return merged.slice(0, 50);
+          });
+        }
+
+        if (preferencesResult.status === "fulfilled" && preferencesResult.value?.preferences) {
+          setNotificationPreferences((prev) => ({ ...prev, ...preferencesResult.value.preferences }));
+        }
+      } catch (error) {
+        console.warn("Could not sync notifications", error);
+      }
+    };
+
+    syncNotifications();
+    recordUserActivity({ activityType: "app_open", source: "web" }).catch(() => {});
+    const timer = window.setInterval(syncNotifications, 60000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [authToken]);
 
   useEffect(() => {
     saveToStorage(SETTINGS_NOTIFICATION_PREFS_KEY, settingsNotificationPrefs);
   }, [settingsNotificationPrefs]);
+
+  useEffect(() => {
+    saveToStorage("dismissedSessionIds", dismissedSessionIds);
+  }, [dismissedSessionIds]);
 
   useEffect(() => {
     if (!loading) {
@@ -1068,12 +1401,32 @@ function Dashboard({ onLogout }) {
     () => (Array.isArray(safeSummary.recentLogs) ? safeSummary.recentLogs : []),
     [safeSummary]
   );
+  const allDailyLogs = useMemo(
+    () => (Array.isArray(safeSummary.allLogs) ? safeSummary.allLogs : recentLogs),
+    [safeSummary, recentLogs]
+  );
+  const moodLogsAll = useMemo(
+    () =>
+      (allDailyLogs || [])
+        .map((log) => {
+          const moodRating = Number(log?.moodRating ?? 0);
+          if (!Number.isFinite(moodRating) || moodRating <= 0) return null;
+          const moodValue = moodRatingToMoodValue(moodRating);
+          return {
+            date: toDateKey(log?.date || log?.logDate || log?.createdAt),
+            moodValue,
+            emoji: moodValueToEmoji[moodValue] || "🙂",
+          };
+        })
+        .filter(Boolean),
+    [allDailyLogs]
+  );
   const sessionLogs = useMemo(
     () => (Array.isArray(safeSummary.upcomingSessions) ? safeSummary.upcomingSessions : []),
     [safeSummary]
   );
-  const hasDailyLogs = Boolean(recentLogs.length);
-  const hasAnyUserData = Boolean(recentLogs.length || assignments.length || sessionLogs.length);
+  const hasDailyLogs = Boolean(allDailyLogs.length);
+  const hasAnyUserData = Boolean(allDailyLogs.length || assignments.length || sessionLogs.length);
 
   const showNoData = (value, suffix = "") => {
     if (value === null || value === undefined || Number.isNaN(value)) return "No data available";
@@ -1084,55 +1437,6 @@ function Dashboard({ onLogout }) {
     const value = Number(safeSummary.todayLog?.moodRating);
     return Number.isFinite(value) ? value : null;
   })();
-
-  const quickStats = useMemo(
-    () => [
-      {
-        label: "Stress Index",
-        value: showNoData(safeSummary.stressIndex),
-        helper: safeSummary.stressCategory || "No data available",
-      },
-      {
-        label: "Average Study",
-        value: showNoData(safeSummary.weeklyStats?.avgStudyHours, "h"),
-        helper: "Per day",
-      },
-      {
-        label: "Average Sleep",
-        value: showNoData(safeSummary.weeklyStats?.avgSleepHours, "h"),
-        helper: "Per night",
-      },
-      {
-        label: "Screen Time",
-        value: showNoData(safeSummary.weeklyStats?.avgScreenTime, "h"),
-        helper: "Daily average",
-      },
-      {
-        label: "Exercise",
-        value: showNoData(safeSummary.weeklyStats?.avgExercise, "m"),
-        helper: "Daily average",
-      },
-      {
-        label: "Mood Today",
-        value: moodTodayValue === null ? "No data available" : `${moodTodayValue}/10`,
-        helper: "Self rating",
-      },
-    ],
-    [safeSummary, moodTodayValue]
-  );
-
-  const studentContext = {
-    stressLevel: Number(safeSummary.stressIndex ?? 0),
-    avgSleepHours: Number(safeSummary.weeklyStats?.avgSleepHours ?? 0),
-    avgStudyHours: Number(safeSummary.weeklyStats?.avgStudyHours ?? 0),
-    moodRating: Number(safeSummary.todayLog?.moodRating ?? 0),
-    recentActivities: {
-      exercise: Number(safeSummary.todayLog?.exerciseMinutes ?? 0),
-      screenTime: Number(safeSummary.todayLog?.screenTime ?? 0),
-      waterIntake: Number(safeSummary.todayLog?.waterIntake ?? 0),
-    },
-  };
-
   const averagePerformance = calculatePerformanceScoreFromTasks(assignments);
 
   const avgFocusMinutes = safeSummary.weeklyStats?.avgFocusMinutes;
@@ -1142,7 +1446,7 @@ function Dashboard({ onLogout }) {
     ? clampPercent((Number(avgFocusMinutes) / Math.max(1, Number(avgFocusMinutes) + Number(avgBreakMinutes))) * 100)
     : null;
 
-  const wellnessRhythm = calculateWellnessScoreFromMoodLogs(recentLogs);
+  const wellnessRhythm = calculateWellnessScoreFromMoodLogs(allDailyLogs);
   const wellnessLabel =
     wellnessRhythm === null
       ? "No data available"
@@ -1151,25 +1455,84 @@ function Dashboard({ onLogout }) {
         : wellnessRhythm >= 45
           ? "Steady Rhythm"
           : "Needs Attention";
-  const todayTasks = sessionLogs.filter((session) => {
-    const date = new Date(session.scheduledDate);
-    if (Number.isNaN(date.getTime())) return false;
-    const now = new Date();
-    return (
-      date.getFullYear() === now.getFullYear() &&
-      date.getMonth() === now.getMonth() &&
-      date.getDate() === now.getDate()
-    );
-  });
-  const todayTaskCount = sessionLogs.length ? todayTasks.length : null;
-  const nextUpcomingTasks = sessionLogs
-    .filter((session) => {
-      const date = new Date(session.scheduledDate);
-      return !Number.isNaN(date.getTime()) && date >= new Date();
-    })
-    .sort((a, b) => new Date(a.scheduledDate) - new Date(b.scheduledDate))
-    .slice(0, 2);
   const todayDateKey = toDateKey(new Date());
+
+  const aiSchedulerTasks = useMemo(() => {
+    try {
+      const stored = loadFromStorage("smartSchedulerTasks", []);
+      return Array.isArray(stored) ? stored : [];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const todayTasks = useMemo(() => {
+    const assignmentTasks = (assignments || [])
+      .filter((assignment) => isToday(getTaskDateValue(assignment)))
+      .map((assignment) => ({
+        id: `assignment-${assignment.id || assignment._id || assignment.title}`,
+        type: "assignment",
+        title: assignment.title || "Assignment",
+        time: getTaskDateValue(assignment),
+        timeLabel: formatTaskTime(getTaskDateValue(assignment)),
+        duration: assignment.estimatedDuration || assignment.duration || null,
+      }));
+
+    const sessionTasks = (sessionLogs || [])
+      .filter((session) => isToday(getTaskDateValue(session)))
+      .map((session) => ({
+        id: `session-${session.id || session._id || session.subject || session.scheduledDate}`,
+        type: "session",
+        title: session.subject || session.title || "Study session",
+        time: getTaskDateValue(session),
+        timeLabel: formatTaskTime(getTaskDateValue(session)),
+        duration: session.duration || null,
+      }));
+
+    const storedAiTasks = (aiSchedulerTasks || [])
+      .filter((task) => isToday(getTaskDateValue(task)))
+      .map((task) => ({
+        id: `ai-${task.id || task.title || task.scheduledDate}`,
+        type: "ai",
+        title: task.title || task.subject || "AI Scheduler task",
+        time: getTaskDateValue(task),
+        timeLabel: formatTaskTime(getTaskDateValue(task)),
+        duration: task.duration || null,
+      }));
+
+    return [...assignmentTasks, ...sessionTasks, ...storedAiTasks]
+      .filter((task) => task.time)
+      .sort((left, right) => new Date(left.time) - new Date(right.time));
+  }, [assignments, sessionLogs, aiSchedulerTasks]);
+
+  const todayTaskCount = todayTasks.length;
+
+  const upcomingStudySessions = useMemo(() => {
+    return (sessionLogs || [])
+      .map((session) => {
+        const scheduledDate = new Date(session.scheduledDate);
+        return Number.isNaN(scheduledDate.getTime())
+          ? null
+          : {
+              ...session,
+              scheduledDate,
+            };
+      })
+      .filter((session) => session && session.scheduledDate >= new Date())
+      .filter((session) => !dismissedSessionIds.includes(String(session.id || session._id || "")))
+      .sort((left, right) => left.scheduledDate - right.scheduledDate)
+      .slice(0, 3);
+  }, [sessionLogs, dismissedSessionIds]);
+
+  const formatUpcomingSessionTime = (scheduledDate) =>
+    scheduledDate.toLocaleString([], {
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+  const getSessionRenderKey = (session, index) =>
+    session?.id || session?._id || session?.scheduledDate?.toISOString?.() || `session-${index}`;
 
   const sleepHoursToday = Number(safeSummary.todayLog?.sleepHours || 0);
   const waterIntakeToday = Number(safeSummary.todayLog?.waterIntake || 0);
@@ -1202,39 +1565,62 @@ function Dashboard({ onLogout }) {
     "--dash-border": theme.border,
   };
 
-  const buildTaskKey = (task) => {
-    const idPart = task.id || task._id || task.scheduledDate || task.subject || "task";
-    return `${idPart}-${toDateKey(task.scheduledDate) || "date-unknown"}`;
-  };
-
   const activityDateKeys = useMemo(
-    () => collectActivityDateKeys(recentLogs, assignments, sessionLogs),
-    [recentLogs, assignments, sessionLogs]
+    () => collectActivityDateKeys(allDailyLogs, assignments, sessionLogs),
+    [allDailyLogs, assignments, sessionLogs]
   );
 
   const weekDays = useMemo(() => buildWeekDaysFromActivity(activityDateKeys), [activityDateKeys]);
 
   const currentStreak = useMemo(() => calculateStreakCount(activityDateKeys), [activityDateKeys]);
+  const studentContext = {
+    stressLevel: Number(safeSummary.stressIndex ?? 0),
+    avgSleepHours: Number(safeSummary.weeklyStats?.avgSleepHours ?? 0),
+    avgStudyHours: Number(safeSummary.weeklyStats?.avgStudyHours ?? 0),
+    moodRating: Number(safeSummary.todayLog?.moodRating ?? 0),
+    recentActivities: {
+      exercise: Number(safeSummary.todayLog?.exerciseMinutes ?? 0),
+      screenTime: Number(safeSummary.todayLog?.screenTime ?? 0),
+      waterIntake: Number(safeSummary.todayLog?.waterIntake ?? 0),
+    },
+  };
+
+  const schedulerContext = {
+    stressIndex: Number(safeSummary.stressIndex ?? 0),
+    stressLabel: String(safeSummary.stressCategory || ""),
+    moodValue: Number(todayMoodLog?.moodValue ?? 0),
+    moodRating: Number(safeSummary.todayLog?.moodRating ?? logForm.moodRating ?? 0),
+    performanceScore: Number(assignmentPlanner.analytics.completionRate ?? 0),
+    consistencyScore: clampPercent((Number(currentStreak || 0) / 7) * 100),
+    availableHours: Math.max(2, Number(logForm.studyHours) || 4),
+    startTime: "09:00",
+  };
 
   const totalXP = useMemo(
-    () => calculateXP(recentLogs, assignments, currentStreak, moodLogsAll),
-    [recentLogs, assignments, currentStreak, moodLogsAll]
+    () => calculateXP(allDailyLogs, assignments, currentStreak, moodLogsAll),
+    [allDailyLogs, assignments, currentStreak, moodLogsAll]
   );
 
   const level = useMemo(() => getLevel(totalXP), [totalXP]);
 
   const rewardsBadges = useMemo(
-    () => calculateBadges(recentLogs, assignments, currentStreak, moodLogsAll, totalXP),
-    [recentLogs, assignments, currentStreak, moodLogsAll, totalXP]
+    () => calculateBadges(allDailyLogs, assignments, currentStreak, moodLogsAll, totalXP),
+    [allDailyLogs, assignments, currentStreak, moodLogsAll, totalXP]
   );
 
-  const xpFromDailyLogs = useMemo(() => (recentLogs?.length || 0) * 50, [recentLogs]);
+  const xpFromDailyLogs = useMemo(() => (allDailyLogs?.length || 0) * 50, [allDailyLogs]);
   const xpFromAssignments = useMemo(
     () => (assignments || []).filter((assignment) => assignment?.status === "completed").length * 30,
     [assignments]
   );
   const xpFromStreak = useMemo(() => Number(currentStreak || 0) * 25, [currentStreak]);
   const xpFromMoodLogs = useMemo(() => (moodLogsAll?.length || 0) * 10, [moodLogsAll]);
+
+  useEffect(() => {
+    console.log("[Dashboard] assignments", assignments);
+    console.log("[Dashboard] sessions", sessionLogs);
+    console.log("[Dashboard] todayTasks", todayTasks);
+  }, [assignments, sessionLogs, todayTasks]);
 
   const xpProgress = useMemo(() => {
     const range = level.max - level.current;
@@ -1254,7 +1640,10 @@ function Dashboard({ onLogout }) {
     { id: "water", icon: "💧", label: "Drink 3L water", value: "+10 XP" },
   ];
 
-  const unreadCount = notifications.filter((notification) => !notification.read).length;
+  const displayNotifications = backendNotifications.length ? backendNotifications : notifications;
+  const unreadCount = backendNotifications.length
+    ? backendNotifications.filter((notification) => !notification.readAt).length
+    : notifications.filter((notification) => !notification.read).length;
 
   const notificationPanelRef = useRef(null);
 
@@ -1294,7 +1683,7 @@ function Dashboard({ onLogout }) {
 
       const hour = now.getHours();
       if (hour >= 19) {
-        const hasLoggedToday = (safeSummary.recentLogs || []).some((log) =>
+        const hasLoggedToday = (safeSummary.allLogs || safeSummary.recentLogs || []).some((log) =>
           toDateKey(log.date || log.createdAt) === todayKey
         );
         const logReminderKey = `log_reminder_${todayKey}`;
@@ -1309,7 +1698,7 @@ function Dashboard({ onLogout }) {
 
       if (hour >= 22 && currentStreak > 0) {
         const streakKey = `streak_warning_${todayKey}`;
-        const hasLoggedToday = (safeSummary.recentLogs || []).some((log) =>
+        const hasLoggedToday = (safeSummary.allLogs || safeSummary.recentLogs || []).some((log) =>
           toDateKey(log.date || log.createdAt) === todayKey
         );
         if (!hasLoggedToday && !localStorage.getItem(streakKey)) {
@@ -1357,20 +1746,6 @@ function Dashboard({ onLogout }) {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const todaysTaskItems = useMemo(
-    () =>
-      todayTasks.map((task) => {
-        const id = buildTaskKey(task);
-        return {
-          id,
-          title: task.subject || "Study session",
-          date: task.scheduledDate,
-          completed: Boolean(completedTaskMap[id]),
-        };
-      }),
-    [todayTasks, completedTaskMap]
-  );
-
   useEffect(() => {
     localStorage.setItem("dashboardTheme", themeName);
   }, [themeName]);
@@ -1380,69 +1755,197 @@ function Dashboard({ onLogout }) {
   }, [themeMode]);
 
   useEffect(() => {
-    try {
-      const moodLogs = loadFromStorage("moodLogs", []);
-      const todayMood = Array.isArray(moodLogs)
-        ? moodLogs.find((entry) => entry?.date === todayDateKey)
+    const todayFromSummary =
+      safeSummary?.todayLog &&
+      toDateKey(safeSummary.todayLog.date || safeSummary.todayLog.logDate || safeSummary.todayLog.createdAt) ===
+        todayDateKey
+        ? safeSummary.todayLog
         : null;
-      setTodayMoodLog(todayMood || null);
-    } catch (error) {
-      console.warn("Could not load moodLog from localStorage", error);
+
+    const todayFromAllLogs = (allDailyLogs || []).find(
+      (log) => toDateKey(log?.date || log?.logDate || log?.createdAt) === todayDateKey
+    );
+
+    const sourceLog = todayFromSummary || todayFromAllLogs || null;
+    const moodRating = Number(sourceLog?.moodRating ?? 0);
+
+    if (Number.isFinite(moodRating) && moodRating > 0) {
+      const moodValue = moodRatingToMoodValue(moodRating);
+      setTodayMoodLog({
+        date: todayDateKey,
+        moodValue,
+        emoji: moodValueToEmoji[moodValue] || "🙂",
+        updatedAt: sourceLog?.updatedAt || sourceLog?.createdAt || new Date().toISOString(),
+      });
+      return;
     }
 
-    try {
-      const tasksByDay = loadFromStorage("tasks", {});
-      if (tasksByDay && typeof tasksByDay === "object") {
-        setCompletedTaskMap(tasksByDay[todayDateKey] || {});
-        return;
-      }
-
-      setCompletedTaskMap({});
-    } catch (error) {
-      console.warn("Could not load task completion from localStorage", error);
-    }
-  }, [todayDateKey]);
+    setTodayMoodLog(null);
+  }, [safeSummary, allDailyLogs, todayDateKey]);
 
   useEffect(() => {
-    try {
-      const data = loadFromStorage("moodLogs", []);
-      setMoodLogsAll(Array.isArray(data) ? data : []);
-    } catch {
-      setMoodLogsAll([]);
+    if (Number(todayMoodLog?.moodValue) <= 2) {
+      setShowScheduleAdjustPrompt(true);
     }
   }, [todayMoodLog]);
 
-  const handleMoodPick = (mood) => {
-    if (todayMoodLog) return;
-
-    const existingLogs = loadFromStorage("moodLogs", []);
-    const filteredLogs = Array.isArray(existingLogs)
-      ? existingLogs.filter((entry) => entry?.date !== todayDateKey)
-      : [];
-
-    const entry = {
-      date: todayDateKey,
-      emoji: mood.emoji,
-      moodValue: mood.moodValue,
-      updatedAt: new Date().toISOString(),
-    };
-
-    saveToStorage("moodLogs", [...filteredLogs, entry]);
-    setUserData({ mood: Math.round((Number(mood.moodValue) || 0) * 20) });
-    setTodayMoodLog(entry);
+  const handleContactSetupChange = (field, value) => {
+    setContactSetupForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleTaskToggle = (taskId, isChecked) => {
-    setCompletedTaskMap((prev) => {
-      const next = { ...prev, [taskId]: isChecked };
-      const allTasks = loadFromStorage("tasks", {});
-      const nextTasks = {
-        ...(allTasks && typeof allTasks === "object" ? allTasks : {}),
-        [todayDateKey]: next,
+  const handleRequestContactSetup = async () => {
+    setContactSetupLoading(true);
+    try {
+      const response = await requestStudentContactSetup({
+        email: contactSetupForm.email,
+      });
+
+      const verificationIds = Array.isArray(response?.verificationIds) ? response.verificationIds : [];
+      setContactSetupVerification({
+        emailVerificationId: verificationIds.find((item) => item.type === "email")?.verificationId || null,
+      });
+      alert("Email code sent");
+    } catch (error) {
+      alert(error.message || "Unable to send verification codes");
+    } finally {
+      setContactSetupLoading(false);
+    }
+  };
+
+  const handleCompleteContactSetup = async () => {
+    if (!contactSetupVerification.emailVerificationId) {
+      alert("Send the email code first.");
+      return;
+    }
+
+    const emailOtp = String(contactSetupForm.emailOtp || "").trim();
+
+    if (!emailOtp) {
+      alert("Enter the email OTP to continue.");
+      return;
+    }
+
+    setContactSetupLoading(true);
+    try {
+      await completeStudentContactSetup({
+        email: contactSetupForm.email,
+        emailVerificationId: contactSetupVerification.emailVerificationId,
+        emailOtp,
+      });
+
+      setContactSetupOpen(false);
+      const profileRes = await getCurrentUserProfile();
+      const profileUser = profileRes?.user || {};
+      setSettingsForm((prev) => ({
+        ...prev,
+        email: profileUser?.email || prev.email,
+        phone: profileUser?.phone || prev.phone,
+      }));
+      alert("Contact setup completed.");
+    } catch (error) {
+      alert(error.message || "Unable to complete contact setup");
+    } finally {
+      setContactSetupLoading(false);
+    }
+  };
+
+  const handleBackendNotificationMarkRead = async (notificationId) => {
+    try {
+      await markNotificationRead(notificationId);
+      setBackendNotifications((prev) => prev.map((item) => (String(item.id) === String(notificationId) ? { ...item, readAt: new Date().toISOString() } : item)));
+    } catch (error) {
+      console.warn("Could not mark backend notification read", error);
+    }
+  };
+
+  const handleMarkAllBackendNotificationsRead = async () => {
+    try {
+      await markAllNotificationsRead();
+      setBackendNotifications((prev) => prev.map((item) => ({ ...item, readAt: item.readAt || new Date().toISOString() })));
+    } catch (error) {
+      console.warn("Could not mark all backend notifications read", error);
+    }
+  };
+
+  const handleMoodPick = async (mood) => {
+    if (todayMoodLog) return;
+
+    const moodValue = Number(mood?.moodValue || 0);
+    const moodRating = moodValueToMoodRating(moodValue);
+
+    try {
+      await saveDailyLog({ moodRating });
+
+      const entry = {
+        date: todayDateKey,
+        emoji: moodValueToEmoji[moodValue] || mood?.emoji || "🙂",
+        moodValue,
+        updatedAt: new Date().toISOString(),
       };
-      saveToStorage("tasks", nextTasks);
-      return next;
-    });
+
+      setLogForm((prev) => ({ ...prev, moodRating }));
+      setUserData({ mood: Math.round(moodValue * 20) });
+      setTodayMoodLog(entry);
+
+      if (moodValue <= 2) {
+        setShowScheduleAdjustPrompt(true);
+      }
+
+      await Promise.allSettled([fetchDashboard(), fetchDailyLogs()]);
+    } catch (error) {
+      console.error("Error saving mood log:", error);
+      alert("Could not save mood to database: " + error.message);
+    }
+  };
+
+  const handleAdjustScheduleNow = () => {
+    setShowScheduleAdjustPrompt(false);
+    setActiveView("assignments");
+    setSchedulerOpenSignal((prev) => prev + 1);
+  };
+
+  const handleNextTaskClick = (task) => {
+    if (!task) return;
+
+    if (task.type === "session") {
+      setActiveView("sessions");
+      return;
+    }
+
+    if (task.type === "assignment") {
+      setActiveView("assignments");
+      return;
+    }
+
+    if (task.type === "ai") {
+      setActiveView("smart-scheduler");
+      return;
+    }
+
+    setActiveView("overview");
+  };
+
+  const handleSmartScheduleCreated = async (scheduleItems = []) => {
+    const createdSessions = Array.isArray(scheduleItems)
+      ? await Promise.all(
+          scheduleItems.map((item) =>
+            createStudySession({
+              subject: item.subject || item.type || "Study block",
+              scheduledDate: item.scheduledDate,
+              duration: item.duration,
+              notes: item.reason || item.notes || "Generated by AI Smart Scheduler",
+            })
+          )
+        )
+      : [];
+
+    if (createdSessions.length) {
+      await fetchStudySessionsForStreak();
+      await fetchDashboard();
+      setActiveView("sessions");
+    }
+
+    return createdSessions;
   };
 
   const handleSettingsFieldChange = (field, value) => {
@@ -1463,7 +1966,7 @@ function Dashboard({ onLogout }) {
     reader.readAsDataURL(file);
   };
 
-  const handleSaveSettings = () => {
+  const handleSaveSettings = async () => {
     const nextErrors = {};
     const trimmedUsername = settingsForm.username.trim();
     const trimmedEmail = settingsForm.email.trim();
@@ -1483,6 +1986,8 @@ function Dashboard({ onLogout }) {
     setSettingsErrors(nextErrors);
     if (Object.keys(nextErrors).length) return;
 
+    setIsSavingSettings(true);
+
     const payload = {
       ...settingsForm,
       username: trimmedUsername,
@@ -1493,15 +1998,32 @@ function Dashboard({ onLogout }) {
       updatedAt: new Date().toISOString(),
     };
 
-    // Update user profile in userAuth system
-    const result = updateUserProfile({
-      username: trimmedUsername,
-      email: trimmedEmail,
-      phone: trimmedPhone,
-    });
+    try {
+      const result = await updateCurrentUserProfile({
+        name: trimmedUsername,
+        phone: trimmedPhone,
+        profilePicture: payload.profilePicture || "",
+        themeMode,
+        notificationsEnabled,
+        notificationPrefs: settingsNotificationPrefs,
+      });
 
-    if (!result.success) {
-      alert(`Failed to update profile: ${result.error}`);
+      const backendUser = result?.user || {};
+      setAccountCreatedAt(backendUser?.createdAt || accountCreatedAt);
+      setSettingsForm((prev) => ({
+        ...prev,
+        email: backendUser?.email || prev.email,
+        phone: backendUser?.phone || prev.phone,
+      }));
+
+      const existingUser = loadFromStorage("user", {});
+      saveToStorage("user", {
+        ...existingUser,
+        ...backendUser,
+      });
+    } catch (error) {
+      alert(`Failed to update profile in backend: ${error.message}`);
+      setIsSavingSettings(false);
       return;
     }
 
@@ -1521,13 +2043,14 @@ function Dashboard({ onLogout }) {
       console.warn("Could not update user record", error);
     }
 
-    alert("Settings saved successfully.");
-    setActiveView("overview");
+      alert("Settings saved successfully");
+    setIsSavingSettings(false);
   };
 
   const handleChangePassword = async (currentPassword, newPassword) => {
     try {
       await changePasswordAPI(currentPassword, newPassword);
+      alert("Password updated successfully");
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };
@@ -1544,8 +2067,24 @@ function Dashboard({ onLogout }) {
   const fetchDashboard = async ({ cacheKey = summaryCacheKey } = {}) => {
     try {
       const data = await getDashboardSummary();
-      setSummary(data);
-      saveToStorage(cacheKey, data);
+      setSummary((prev) => {
+        const prevAllLogs = Array.isArray(prev?.allLogs) ? prev.allLogs : [];
+        const next = {
+          ...(prev || {}),
+          ...(data || {}),
+        };
+
+        if (!Array.isArray(next.allLogs) || next.allLogs.length < prevAllLogs.length) {
+          next.allLogs = prevAllLogs;
+        }
+
+        if (!next.todayLog && prev?.todayLog) {
+          next.todayLog = prev.todayLog;
+        }
+
+        saveToStorage(cacheKey, next);
+        return next;
+      });
     } catch (error) {
       console.error("Error fetching dashboard:", error);
     }
@@ -1555,12 +2094,16 @@ function Dashboard({ onLogout }) {
     try {
       const logs = await getDailyLogs();
       if (!Array.isArray(logs)) return;
+      const todayLog = logs.find(
+        (log) => toDateKey(log?.date || log?.logDate || log?.createdAt) === todayDateKey
+      ) || null;
 
       setSummary((prev) => {
         const next = {
           ...(prev || {}),
           recentLogs: logs.slice(0, 7),
-          todayLog: logs[0] || null,
+          allLogs: logs,
+          todayLog,
         };
         saveToStorage(summaryCacheKey, next);
         return next;
@@ -1612,6 +2155,118 @@ function Dashboard({ onLogout }) {
     } catch (error) {
       console.error("Error fetching study sessions:", error);
     }
+  };
+
+  const handleUpcomingSessionAction = async (session, action) => {
+    const sessionId = session?.id || session?._id;
+    if (!sessionId) return;
+
+    const sessionLabel = session.subject || session.title || "Study session";
+
+    try {
+      if (action === "done") {
+        await completeStudySession(sessionId);
+        await saveLiveSessionActivity({
+          message: `Marked study session done: ${sessionLabel}`,
+          action: "done",
+          kind: "study-session",
+          metadata: { sessionId, subject: sessionLabel },
+        });
+      } else {
+        await saveLiveSessionActivity({
+          message: `Cleared study session from list: ${sessionLabel}`,
+          action: "clear",
+          kind: "study-session",
+          metadata: { sessionId, subject: sessionLabel },
+        });
+      }
+
+      setDismissedSessionIds((prev) => (prev.includes(String(sessionId)) ? prev : [...prev, String(sessionId)]));
+      await Promise.allSettled([fetchStudySessionsForStreak(), fetchDashboard()]);
+    } catch (error) {
+      alert(`Could not ${action} session: ${error.message}`);
+    }
+  };
+
+  const handleSaveBackendNotificationPrefs = async () => {
+    const reminderTime = String(notificationPreferences.dailyLogReminderTime || "").trim();
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(reminderTime)) {
+      alert("Please select a valid daily reminder time");
+      return;
+    }
+
+    if (!notificationPreferences.emailOn) {
+      alert("Turn on Email notifications to activate daily reminders");
+      return;
+    }
+
+    setIsSavingBackendNotificationPrefs(true);
+    try {
+      await updateNotificationPreferences(notificationPreferences);
+      alert("Notification delivery preferences saved");
+    } catch (error) {
+      alert(error.message || "Unable to save notification preferences");
+    } finally {
+      setIsSavingBackendNotificationPrefs(false);
+    }
+  };
+
+  const handleThemeCardSelect = (value) => {
+    setThemeName(value);
+    setThemeMode("custom");
+  };
+
+  const handleThemeModeChange = (value) => {
+    setThemeMode(value);
+    if (value === "light" || value === "dark") {
+      setThemeName(value);
+    }
+  };
+
+  const handleBehaviorPrefChange = (key, value) => {
+    setSettingsBehaviorPrefs((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleResetSettingsToDefault = () => {
+    setThemeName("dark");
+    setThemeMode("system");
+    setNotificationsEnabled(false);
+    setSettingsNotificationPrefs(DEFAULT_SETTINGS_NOTIFICATION_PREFS);
+    setNotificationPreferences(DEFAULT_NOTIFICATION_PREFS);
+    setSettingsBehaviorPrefs(DEFAULT_BEHAVIOR_PREFS);
+    alert("Settings reset to defaults");
+  };
+
+  const handleExportSettings = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      profile: {
+        username: settingsForm.username,
+        email: settingsForm.email,
+        phone: settingsForm.phone,
+      },
+      appearance: {
+        themeName,
+        themeMode,
+      },
+      notifications: {
+        notificationsEnabled,
+        inApp: settingsNotificationPrefs,
+        delivery: notificationPreferences,
+      },
+      behavior: settingsBehaviorPrefs,
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "student-wellness-settings.json";
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    alert("Settings export started");
   };
 
   const fetchParentRequests = async () => {
@@ -1680,6 +2335,14 @@ function Dashboard({ onLogout }) {
         studyTime: totalStudyMinutes,
         mood: moodPercent,
       });
+
+      const isStressTrigger =
+        String(logForm.stressLevel || "").toLowerCase() === "high" ||
+        Number(logForm.moodRating || 0) <= 4;
+      if (isStressTrigger) {
+        setShowScheduleAdjustPrompt(true);
+      }
+
       alert("Daily log saved successfully!");
       setShowLogForm(false);
       fetchDashboard();
@@ -1793,6 +2456,16 @@ function Dashboard({ onLogout }) {
 
   return (
     <div className="dashboard-container" style={dashboardThemeStyle}>
+      <ContactSetupModal
+        open={contactSetupOpen}
+        form={contactSetupForm}
+        verification={contactSetupVerification}
+        loading={contactSetupLoading}
+        onChange={handleContactSetupChange}
+        onRequestOtp={handleRequestContactSetup}
+        onComplete={handleCompleteContactSetup}
+        onClose={() => setContactSetupOpen(false)}
+      />
       <Header
         theme={theme}
         themeName={themeName}
@@ -1813,18 +2486,11 @@ function Dashboard({ onLogout }) {
           onFieldChange={handleSettingsFieldChange}
           onProfilePictureChange={handleProfilePictureChange}
           onSave={handleSaveSettings}
+          isSaving={isSavingSettings}
           onChangePassword={handleChangePassword}
-          onThemeCardSelect={(value) => {
-            setThemeName(value);
-            setThemeMode("custom");
-          }}
+          onThemeCardSelect={handleThemeCardSelect}
           themeMode={themeMode}
-          onThemeModeChange={(value) => {
-            setThemeMode(value);
-            if (value === "light" || value === "dark") {
-              setThemeName(value);
-            }
-          }}
+          onThemeModeChange={handleThemeModeChange}
           activeThemeName={themeName}
           notificationsEnabled={notificationsEnabled}
           onNotificationToggle={setNotificationsEnabled}
@@ -1832,6 +2498,16 @@ function Dashboard({ onLogout }) {
           onNotificationPrefToggle={(key) =>
             setSettingsNotificationPrefs((prev) => ({ ...prev, [key]: !prev[key] }))
           }
+          backendNotificationPrefs={notificationPreferences}
+          onBackendNotificationPrefChange={(key, value) =>
+            setNotificationPreferences((prev) => ({ ...prev, [key]: value }))
+          }
+          onSaveBackendNotificationPrefs={handleSaveBackendNotificationPrefs}
+          isSavingBackendNotificationPrefs={isSavingBackendNotificationPrefs}
+          behaviorPrefs={settingsBehaviorPrefs}
+          onBehaviorPrefChange={handleBehaviorPrefChange}
+          onResetDefaults={handleResetSettingsToDefault}
+          onExportSettings={handleExportSettings}
           parentCode={parentCode}
           parentRequests={parentRequests}
           allowWellnessShare={allowWellnessShare}
@@ -1855,6 +2531,7 @@ function Dashboard({ onLogout }) {
                 <button className={`left-nav-item ${activeView === "overview" ? "active" : ""}`} onClick={() => setActiveView("overview")}>Dashboard</button>
                 <button className={`left-nav-item ${activeView === "analytics" ? "active" : ""}`} onClick={() => setActiveView("analytics")}>Analytics</button>
                 <button className={`left-nav-item ${activeView === "rewards" ? "active" : ""}`} onClick={() => setActiveView("rewards")}>Rewards</button>
+                <button className={`left-nav-item ${activeView === "notifications" ? "active" : ""}`} onClick={() => setActiveView("notifications")}>Notifications</button>
                 <button className={`left-nav-item ${activeView === "sessions" ? "active" : ""}`} onClick={() => setActiveView("sessions")}>Study Sessions</button>
                 <button className={`left-nav-item ${activeView === "settings" ? "active" : ""}`} onClick={() => setActiveView("settings")}>Settings</button>
               </nav>
@@ -1889,7 +2566,7 @@ function Dashboard({ onLogout }) {
                 </div>
                 <StatsCard label="Wellness" value={wellnessRhythm === null ? "--" : `${wellnessRhythm}%`} helper={wellnessLabel} tone="wellness" />
                 <StatsCard label="Performance" value={averagePerformance === null ? "--" : `${averagePerformance}%`} helper="Assignments" tone="progress" />
-                <StatsCard label="Today" value={todayTaskCount === null ? "--" : `${todayTaskCount}`} helper="Upcoming sessions" tone="default" />
+                <StatsCard label="Today" value={`${todayTaskCount}`} helper="Tasks scheduled today" tone="default" />
                 <div className="notification-shell" ref={notificationPanelRef}>
                   <button
                     type="button"
@@ -1915,26 +2592,44 @@ function Dashboard({ onLogout }) {
                       </div>
 
                       <div className="notification-list">
-                        {notifications.length ? (
-                          notifications.map((notification) => (
-                            <article key={notification.id} className={`notification-item ${notification.read ? "read" : "unread"}`}>
+                        {displayNotifications.length ? (
+                          displayNotifications.map((notification) => {
+                            const isRead = backendNotifications.length ? Boolean(notification.readAt) : Boolean(notification.read);
+
+                            return (
+                            <article key={notification.id} className={`notification-item ${isRead ? "read" : "unread"}`}>
                               <span className={`notification-dot type-${notification.type}`} aria-hidden="true" />
                               <div className="notification-copy">
                                 <div className="notification-title-row">
-                                  <strong>{notification.title}</strong>
-                                  <span>{formatTimeAgo(notification.createdAt)}</span>
+                                  <strong>{notification.title || notification.type}</strong>
+                                  <span>{formatTimeAgo(notification.createdAt || notification.sentAt)}</span>
                                 </div>
-                                <p>{notification.body}</p>
+                                <p>{notification.body || notification.messagePreview || ""}</p>
                               </div>
+                              {!isRead && backendNotifications.length ? (
+                                <button type="button" className="notification-panel-close" onClick={() => handleBackendNotificationMarkRead(notification.id)}>
+                                  Mark read
+                                </button>
+                              ) : null}
                             </article>
-                          ))
+                            );
+                          })
                         ) : (
                           <p className="notification-empty">No notifications yet.</p>
                         )}
                       </div>
 
                       <div className="notification-actions">
-                        <button type="button" onClick={() => setNotifications(markAllRead())}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (backendNotifications.length) {
+                              handleMarkAllBackendNotificationsRead();
+                              return;
+                            }
+                            setNotifications(markAllRead());
+                          }}
+                        >
                           Mark all read
                         </button>
                         <button type="button" onClick={() => setNotifications(clearAllNotifications())}>
@@ -1944,7 +2639,9 @@ function Dashboard({ onLogout }) {
                     </div>
                   )}
                 </div>
-                <button type="button" className="dashboard-notify-chip" onClick={() => setActiveView("settings")}>⚙️ Settings</button>
+                <button type="button" className="calendar-btn" onClick={() => setIsCalendarOpen(true)} aria-label="Open calendar">
+                  📅
+                </button>
               </div>
             </>
           }
@@ -1955,13 +2652,13 @@ function Dashboard({ onLogout }) {
                 <MoodTracker todayMoodLog={todayMoodLog} onLogMood={handleMoodPick} />
               </section>
               <section className="panel-card">
-                <TaskList todaysTasks={todaysTaskItems} onToggleTask={handleTaskToggle} />
+                <TaskList todaysTasks={todayTasks} taskCount={todayTaskCount} onNextTaskClick={handleNextTaskClick} />
               </section>
               <section className="panel-card quick-actions-panel">
                 <h3>Quick Actions</h3>
                 <button className="quick-action-icon-btn" onClick={() => setActiveView("assignments")}>📚 Assignments</button>
                 <button className="quick-action-icon-btn" onClick={() => setActiveView("sessions")}>🎥 Study Hub</button>
-                <button className="quick-action-icon-btn" onClick={() => setActiveView("ai-tools")}>🤖 AI Coach</button>
+                <button className="quick-action-icon-btn" onClick={() => setActiveView("smart-scheduler")}>🤖 AI Smart Scheduler</button>
                 <button className="quick-action-icon-btn danger" onClick={handleLogoutClick}>↩ Logout</button>
               </section>
             </>
@@ -1979,6 +2676,23 @@ function Dashboard({ onLogout }) {
                   </button>
                 ))}
               </section>
+
+              {showScheduleAdjustPrompt && (
+                <section className="unlock-card" aria-live="polite">
+                  <div>
+                    <h3>Want me to adjust your schedule for today?</h3>
+                    <p>I can rebalance your plan with lighter, achievable blocks and extra recovery breaks.</p>
+                  </div>
+                  <div className="inline-actions">
+                    <button type="button" className="btn-primary" onClick={handleAdjustScheduleNow}>
+                      Adjust With AI Scheduler
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={() => setShowScheduleAdjustPrompt(false)}>
+                      Not now
+                    </button>
+                  </div>
+                </section>
+              )}
 
       {activeView === "overview" && (
         <>
@@ -2003,9 +2717,40 @@ function Dashboard({ onLogout }) {
             <button className="quick-link-pill" onClick={() => setActiveView("assignments")}>
               Assignments
             </button>
-            <button className="quick-link-pill" onClick={() => setActiveView("ai-tools")}>
-              AI Coach
+            <button className="quick-link-pill" onClick={() => setActiveView("smart-scheduler") }>
+              AI Smart Scheduler
             </button>
+          </section>
+
+          <section className="overview-sessions-card glass-card" aria-label="Upcoming Study Sessions">
+            <div className="overview-sessions-header">
+              <div>
+                <h2>Upcoming Study Sessions</h2>
+                <p>Quick glance at what is next from Live Session.</p>
+              </div>
+            </div>
+
+            {upcomingStudySessions.length ? (
+              <div className="overview-sessions-list">
+                {upcomingStudySessions.map((session, index) => {
+                  const isNext = index === 0;
+                  return (
+                    <article key={getSessionRenderKey(session, index)} className={`overview-session-item ${isNext ? "next" : ""}`}>
+                      <div className="overview-session-topline">
+                        <strong>{session.subject || "Study session"}</strong>
+                        {isNext && <span className="overview-next-badge">Next</span>}
+                      </div>
+                      <div className="overview-session-meta">
+                        <span>{formatUpcomingSessionTime(session.scheduledDate)}</span>
+                        {Number(session.duration) > 0 && <span>{Number(session.duration)} min</span>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="overview-sessions-empty">No upcoming sessions</p>
+            )}
           </section>
 
           <section className="dashboard-hero-section">
@@ -2076,12 +2821,12 @@ function Dashboard({ onLogout }) {
 
           <section className="glass-card analytics-upcoming-sessions">
             <h2>Upcoming Sessions</h2>
-            {nextUpcomingTasks.length ? (
+            {upcomingStudySessions.length ? (
               <ul className="insight-task-list">
-                {nextUpcomingTasks.map((task) => (
-                  <li key={task.id || task._id || task.scheduledDate}>
-                    <span>{task.subject || "Study session"}</span>
-                    <small>{new Date(task.scheduledDate).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
+                {upcomingStudySessions.map((session, index) => (
+                  <li key={getSessionRenderKey(session, index)}>
+                    <span>{session.subject || "Study session"}</span>
+                    <small>{formatUpcomingSessionTime(session.scheduledDate)}</small>
                   </li>
                 ))}
               </ul>
@@ -2114,7 +2859,7 @@ function Dashboard({ onLogout }) {
           <article className="rewards-xp-breakdown">
             <h3>XP Breakdown</h3>
             <ul>
-              <li>From daily logs: {xpFromDailyLogs} XP ({recentLogs.length} x 50)</li>
+              <li>From daily logs: {xpFromDailyLogs} XP ({allDailyLogs.length} x 50)</li>
               <li>From assignments: {xpFromAssignments} XP</li>
               <li>From streak: {xpFromStreak} XP ({currentStreak} x 25)</li>
               <li>From mood logs: {xpFromMoodLogs} XP ({moodLogsAll.length} x 10)</li>
@@ -2154,6 +2899,94 @@ function Dashboard({ onLogout }) {
               ))}
             </div>
           </article>
+        </section>
+      )}
+
+      {activeView === "notifications" && (
+        <section className="glass-card feature-section">
+          <div className="feature-head">
+            <div>
+              <h2>Notifications Center</h2>
+              <p>Email-only reminder settings.</p>
+            </div>
+          </div>
+
+          <div className="settings-content-card" style={{ marginBottom: 16 }}>
+            <h3>Daily Reminder Settings</h3>
+            <div className="settings-toggle-row-full">
+              <div>
+                <strong>Email notifications</strong>
+                <p>Enable daily reminder emails to your registered address.</p>
+              </div>
+              <button
+                type="button"
+                className={`settings-pill-toggle ${notificationPreferences.emailOn ? "on" : ""}`}
+                onClick={() => setNotificationPreferences((prev) => ({ ...prev, emailOn: !prev.emailOn }))}
+                aria-pressed={notificationPreferences.emailOn}
+              >
+                <span />
+              </button>
+            </div>
+
+            <p className="settings-inline-message">
+              We&rsquo;ll send you a daily reminder at your selected time.
+            </p>
+
+            <div className="settings-card-grid">
+              <label className="settings-card-field">
+                <span>Daily log reminder time</span>
+                <input
+                  type="time"
+                  value={notificationPreferences.dailyLogReminderTime || "21:00"}
+                  onChange={(event) =>
+                    setNotificationPreferences((prev) => ({ ...prev, dailyLogReminderTime: event.target.value }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="settings-card-actions">
+              <button type="button" className="settings-card-btn settings-card-btn-primary" onClick={handleSaveBackendNotificationPrefs} disabled={isSavingBackendNotificationPrefs}>
+                {isSavingBackendNotificationPrefs ? <span className="settings-spinner" aria-hidden="true" /> : null}
+                {isSavingBackendNotificationPrefs ? "Saving..." : "Save reminder settings"}
+              </button>
+            </div>
+          </div>
+
+          <div className="sessions-card" style={{ marginBottom: 16 }}>
+            <h3>Unread Inbox</h3>
+            {backendNotifications.length ? (
+              <ul>
+                {backendNotifications.map((item) => (
+                  <li key={item.id}>
+                    <div>
+                      <strong>{item.title || item.type || "Notification"}</strong>
+                      <div className="session-meta">{new Date(item.sentAt).toLocaleString()}</div>
+                      <div className="session-meta">{item.channel} • {item.status}</div>
+                    </div>
+                    {!item.readAt ? (
+                      <button
+                        type="button"
+                        className="session-action-btn done"
+                        onClick={() => handleBackendNotificationMarkRead(item.id)}
+                      >
+                        Mark read
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="sessions-empty">No unread notifications.</p>
+            )}
+
+            <div className="session-action-row">
+              <button type="button" className="session-action-btn done" onClick={handleMarkAllBackendNotificationsRead}>
+                Mark all read
+              </button>
+            </div>
+          </div>
+
         </section>
       )}
 
@@ -2253,7 +3086,11 @@ function Dashboard({ onLogout }) {
 
       {activeView === "assignments" && (
         <section className="glass-card feature-section">
-          <AssignmentPlanner {...assignmentPlanner} />
+          <AssignmentPlanner
+            {...assignmentPlanner}
+            schedulerContext={schedulerContext}
+            openSchedulerSignal={schedulerOpenSignal}
+          />
         </section>
       )}
 
@@ -2268,9 +3105,9 @@ function Dashboard({ onLogout }) {
 
           <div className="sessions-card">
             <h3>Upcoming Study Sessions</h3>
-            {safeSummary.upcomingSessions?.length ? (
+            {upcomingStudySessions.length ? (
               <ul>
-                {safeSummary.upcomingSessions.map((session) => {
+                {upcomingStudySessions.map((session) => {
                   const sessionDate = new Date(session.scheduledDate);
                   const isPastDue = sessionDate < new Date();
                   return (
@@ -2281,6 +3118,24 @@ function Dashboard({ onLogout }) {
                       </div>
                       <div className="session-date">
                         {sessionDate.toLocaleString()} {isPastDue && <em>(past due)</em>}
+                      </div>
+                      <div className="session-action-row">
+                        <button
+                          type="button"
+                          className="session-action-btn done"
+                          onClick={() => handleUpcomingSessionAction(session, "done")}
+                          aria-label={`Mark ${session.subject || "session"} as done`}
+                        >
+                          ✓ Done
+                        </button>
+                        <button
+                          type="button"
+                          className="session-action-btn clear"
+                          onClick={() => handleUpcomingSessionAction(session, "clear")}
+                          aria-label={`Clear ${session.subject || "session"}`}
+                        >
+                          ✕ Clear
+                        </button>
                       </div>
                     </li>
                   );
@@ -2295,20 +3150,29 @@ function Dashboard({ onLogout }) {
         </section>
       )}
 
-      {activeView === "ai-tools" && (
+      {activeView === "smart-scheduler" && (
         <section className="glass-card feature-section">
           <div className="feature-head">
             <div>
-              <h2>AI Assistant Space</h2>
-              <p>Switch modes and chat with your AI study coach in real time.</p>
+              <h2>AI Smart Scheduler</h2>
+              <p>Build a realistic, balanced plan that adapts to workload, performance, and stress.</p>
             </div>
           </div>
 
-          <AiCoach />
+          <SmartScheduler studentContext={schedulerContext} onScheduleCreated={handleSmartScheduleCreated} />
         </section>
       )}
             </>
           }
+        />
+      )}
+
+      {isCalendarOpen && (
+        <MonthlyCalendar
+          loginDates={(allDailyLogs || []).map((log) => log.date || log.logDate || log.createdAt)}
+          assignments={assignments || []}
+          accountCreatedAt={accountCreatedAt}
+          onClose={() => setIsCalendarOpen(false)}
         />
       )}
     </div>

@@ -103,6 +103,243 @@ export const loginUser = async (data) => {
   return result;
 };
 
+export const getCurrentUserProfile = async () => {
+  const res = await fetch(`${BASE_URL}/auth/me`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const updateCurrentUserProfile = async (data) => {
+  const res = await fetch(`${BASE_URL}/auth/profile`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data || {}),
+  });
+  return handleResponse(res);
+};
+
+export const sendOtp = async (payload, isParent = false) => {
+  const res = await fetch(`${BASE_URL}/auth/send-otp`, {
+    method: "POST",
+    headers: isParent ? getParentAuthHeaders() : getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const verifyOtp = async (payload, isParent = false) => {
+  const res = await fetch(`${BASE_URL}/auth/verify-otp`, {
+    method: "POST",
+    headers: isParent ? getParentAuthHeaders() : getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const requestStudentContactSetup = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/student/setup`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ ...(payload || {}), step: "request" }),
+  });
+  return handleResponse(res);
+};
+
+export const completeStudentContactSetup = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/student/setup`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ ...(payload || {}), step: "complete" }),
+  });
+  return handleResponse(res);
+};
+
+export const requestParentContactSetup = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/parent/setup`, {
+    method: "POST",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify({ ...(payload || {}), step: "request" }),
+  });
+  return handleResponse(res);
+};
+
+export const completeParentContactSetup = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/parent/setup`, {
+    method: "POST",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify({ ...(payload || {}), step: "complete" }),
+  });
+  return handleResponse(res);
+};
+
+export const verifyNotificationOtp = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/verify-otp`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const requestContactChange = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/contact/change-request`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const confirmContactChange = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/contact/confirm-change`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const getNotificationPreferences = async () => {
+  const res = await fetch(`${BASE_URL}/notifications/preferences`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const updateNotificationPreferences = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/preferences`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const getNotificationInbox = async () => {
+  const res = await fetch(`${BASE_URL}/notifications/inbox`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const getNotificationHistory = async (limit = 50) => {
+  const res = await fetch(`${BASE_URL}/notifications/history?limit=${encodeURIComponent(limit)}`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const markNotificationRead = async (notificationId) => {
+  const res = await fetch(`${BASE_URL}/notifications/${notificationId}/read`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const markAllNotificationsRead = async () => {
+  const res = await fetch(`${BASE_URL}/notifications/read-all`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const sendParentNote = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/parent/note`, {
+    method: "POST",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const recordUserActivity = async (payload) => {
+  const res = await fetch(`${BASE_URL}/notifications/activity`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const sendStudentContactCode = async (payload) => {
+  const safePayload = payload || {};
+  const channel = String(safePayload.channel || "").trim().toLowerCase();
+  const purpose = String(safePayload.purpose || "initial").trim().toLowerCase();
+
+  if (purpose === "initial") {
+    if (channel === "email") {
+      const res = await fetch(`${BASE_URL}/send-email-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: safePayload.target }),
+      });
+      return handleResponse(res);
+    }
+
+    if (channel === "phone") {
+      const res = await fetch(`${BASE_URL}/send-phone-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: safePayload.target }),
+      });
+      return handleResponse(res);
+    }
+  }
+
+  const res = await fetch(`${BASE_URL}/auth/contact/send-code`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(safePayload),
+  });
+  return handleResponse(res);
+};
+
+export const verifyStudentContactCode = async (payload) => {
+  const safePayload = payload || {};
+  const channel = String(safePayload.channel || "").trim().toLowerCase();
+  const purpose = String(safePayload.purpose || "initial").trim().toLowerCase();
+
+  if (purpose === "initial") {
+    if (channel === "email") {
+      const res = await fetch(`${BASE_URL}/verify-email-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: safePayload.target,
+          code: safePayload.code,
+        }),
+      });
+      return handleResponse(res);
+    }
+
+    if (channel === "phone") {
+      const res = await fetch(`${BASE_URL}/verify-phone-code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: safePayload.target,
+          code: safePayload.code,
+        }),
+      });
+      return handleResponse(res);
+    }
+  }
+
+  const res = await fetch(`${BASE_URL}/auth/contact/verify-code`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(safePayload),
+  });
+  return handleResponse(res);
+};
+
 export const changePasswordAPI = async (currentPassword, newPassword) => {
   const token = localStorage.getItem("token");
   const response = await fetch(`${BASE_URL}/auth/change-password`, {
@@ -281,6 +518,15 @@ export const endLiveSessionTracking = async () => {
   return handleResponse(res);
 };
 
+export const saveLiveSessionActivity = async ({ message, action = "suggested", kind = "suggestion", metadata = null }) => {
+  const res = await fetch(`${BASE_URL}/parent/student/live-session/activity`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ message, action, kind, metadata }),
+  });
+  return handleResponse(res);
+};
+
 export const getParentDashboard = async () => {
   const res = await fetch(`${BASE_URL}/parent/dashboard`, {
     method: "GET",
@@ -355,17 +601,171 @@ export const updateParentNotificationPreferences = async (preferences) => {
   return handleResponse(res);
 };
 
-// AI Chat API
-export const sendChatMessage = async (messages, systemPrompt = "") => {
-  const res = await fetch(`${BASE_URL}/chat`, {
+export const getParentProfile = async () => {
+  const res = await fetch(`${BASE_URL}/parent/profile`, {
+    method: "GET",
+    headers: getParentAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+export const updateParentProfile = async (payload) => {
+  const res = await fetch(`${BASE_URL}/parent/profile`, {
+    method: "PATCH",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const sendParentContactCode = async (payload) => {
+  const res = await fetch(`${BASE_URL}/parent/contact/send-code`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messages,
-      systemPrompt,
-    }),
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+export const verifyParentContactCode = async (payload) => {
+  const res = await fetch(`${BASE_URL}/parent/contact/verify-code`, {
+    method: "POST",
+    headers: getParentAuthHeaders(),
+    body: JSON.stringify(payload || {}),
+  });
+  return handleResponse(res);
+};
+
+// AI Chat API
+export const sendChatMessage = async (messages, systemPrompt = "", attachment = null) => {
+  const lastMessage = Array.isArray(messages) && messages.length ? messages[messages.length - 1] : null;
+  const message = String(lastMessage?.content || "");
+  const contextMessages = Array.isArray(messages)
+    ? messages
+        .slice(-20)
+        .map((msg) => ({
+          role: msg?.role === "assistant" ? "assistant" : "user",
+          content: String(msg?.content || ""),
+        }))
+        .filter((msg) => msg.content.trim())
+    : [];
+  const controller = new AbortController();
+  const timeoutMs = 25000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(`${BASE_URL}/chat`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ message, systemPrompt, contextMessages, attachment }),
+      signal: controller.signal,
+    });
+
+    const data = await parseJsonResponse(res);
+
+    if (!res.ok) {
+      console.error("Frontend API Error:", data);
+      const rawMessage = String(data?.error || data?.message || "").trim();
+      const looksLikeHtml = rawMessage.startsWith("<!DOCTYPE") || rawMessage.includes("<html");
+
+      if (res.status === 413) {
+        throw new Error("File is too large. Please upload a smaller file (under 20MB).");
+      }
+
+      if (looksLikeHtml) {
+        throw new Error("Server rejected this file payload. Please try a smaller file or restart backend.");
+      }
+
+      throw new Error(rawMessage || "Chat failed");
+    }
+
+    return { content: [{ text: data.reply || data.content?.[0]?.text || "" }] };
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error("Pluto is taking too long. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+// ============================================================
+// CHAT PERSISTENCE APIs
+// ============================================================
+
+// Create new chat
+export const createChat = async (title = "New Conversation") => {
+  const res = await fetch(`${BASE_URL}/chats`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title }),
+  });
+  const data = await handleResponse(res);
+
+  if (data?.chat?.id) {
+    return data.chat;
+  }
+
+  if (data?.chatId) {
+    const now = new Date().toISOString();
+    return {
+      id: data.chatId,
+      title,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  return data;
+};
+
+// Get all chats for user
+export const getChats = async () => {
+  const res = await fetch(`${BASE_URL}/chats`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  const data = await handleResponse(res);
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.chats)) return data.chats;
+  return [];
+};
+
+// Update chat title
+export const updateChatTitle = async (chatId, title) => {
+  const res = await fetch(`${BASE_URL}/chats/${chatId}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title }),
+  });
+  return handleResponse(res);
+};
+
+// Delete chat
+export const deleteChat = async (chatId) => {
+  const res = await fetch(`${BASE_URL}/chats/${chatId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+// Get messages for a chat
+export const getChatMessages = async (chatId) => {
+  const res = await fetch(`${BASE_URL}/chats/${chatId}/messages`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+  });
+  return handleResponse(res);
+};
+
+// Save message
+export const saveMessage = async (chatId, role, content) => {
+  const res = await fetch(`${BASE_URL}/chats/messages`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ chatId, role, content }),
   });
   return handleResponse(res);
 };

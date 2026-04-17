@@ -47,6 +47,10 @@ const LiveSessionActivity = sequelize.define(
       type: DataTypes.INTEGER,
       defaultValue: 0,
     },
+    activityLog: {
+      type: DataTypes.TEXT,
+      defaultValue: "[]",
+    },
     status: {
       type: DataTypes.STRING,
       allowNull: false,

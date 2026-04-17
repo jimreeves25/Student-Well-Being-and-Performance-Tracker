@@ -25,11 +25,18 @@
   position: relative;
   overflow: hidden;
   font-family: "Avenir Next", "Segoe UI", "Trebuchet MS", sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .parent-dashboard > * {
   position: relative;
   z-index: 1;
+}
+
+.parent-dashboard > :not(.parent-glow) {
+  width: min(1240px, 100%);
 }
 
 .parent-glow {

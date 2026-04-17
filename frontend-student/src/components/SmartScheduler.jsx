@@ -18,6 +18,9 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
   const [generatedSchedule, setGeneratedSchedule] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
+  const stressIndex = Number(studentContext?.stressIndex ?? 50);
+  const stressLabel = String(studentContext?.stressLabel || "").trim() || (stressIndex >= 80 ? "High" : stressIndex >= 60 ? "Medium" : "Low");
+
   const handleAddSubject = () => {
     if (currentSubject.name.trim()) {
       setSubjects([...subjects, { ...currentSubject, id: Date.now() }]);
@@ -35,8 +38,8 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
 
     const params = {
       subjects,
-        stressIndex: studentContext?.stressIndex ?? 50,
-        avgSleepHours: studentContext?.avgSleepHours ?? 7,
+      stressIndex,
+      avgSleepHours: studentContext?.avgSleepHours ?? 7,
       ...scheduleParams,
     };
 
@@ -153,10 +156,10 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
                         <span
                           className="stat-value"
                           style={{
-                            color: getStressColor(studentContext.stressIndex),
+                            color: getStressColor(stressIndex),
                           }}
                         >
-                          {studentContext.stressIndex || 50}/100
+                          {stressLabel}
                         </span>
                       </div>
                       <div className="stat-item">
@@ -290,7 +293,7 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
                     <div className="ai-features-card">
                       <h4>🧠 AI Will Optimize For:</h4>
                       <ul>
-                        <li>✓ Your current stress level ({studentContext.stressIndex}/100)</li>
+                        <li>✓ Your current stress level ({stressLabel})</li>
                         <li>✓ Sleep quality ({studentContext.avgSleepHours}h avg)</li>
                         <li>✓ Peak cognitive performance times</li>
                         <li>✓ Strategic break placement</li>
@@ -323,7 +326,7 @@ function SmartScheduler({ studentContext, onScheduleCreated }) {
                       </div>
                       <p>Creating optimal schedule based on:</p>
                       <ul>
-                        <li>Stress level: {studentContext.stressIndex}/100</li>
+                        <li>Stress level: {stressLabel}</li>
                         <li>Sleep pattern: {studentContext.avgSleepHours}h</li>
                         <li>{subjects.length} subjects with varying difficulty</li>
                       </ul>

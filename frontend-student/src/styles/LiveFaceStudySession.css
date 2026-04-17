@@ -234,6 +234,61 @@
   color: #334;
 }
 
+.live-suggestion-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.live-suggestion-actions-inline {
+  margin-top: 14px;
+  margin-bottom: 16px;
+}
+
+.live-suggestion-action {
+  border: 1px solid #c9d4e7;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  background: white;
+  color: #244;
+}
+
+.live-suggestion-action.done {
+  border-color: #1f9d55;
+  color: #1f9d55;
+}
+
+.live-suggestion-action.clear {
+  border-color: #d64545;
+  color: #d64545;
+}
+
+.live-suggestion-action.done.active,
+.live-suggestion-action.done:hover {
+  background: rgba(31, 157, 85, 0.08);
+}
+
+.live-suggestion-action.clear.active,
+.live-suggestion-action.clear:hover {
+  background: rgba(214, 69, 69, 0.08);
+}
+
+.live-suggestion-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.live-suggestion-status {
+  display: block;
+  margin-top: 8px;
+  color: #556;
+  font-size: 0.82rem;
+}
+
 @media (max-width: 768px) {
   .live-face-card {
     padding: 18px;

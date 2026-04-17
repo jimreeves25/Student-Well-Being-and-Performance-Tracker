@@ -437,6 +437,15 @@
   gap: 16px;
 }
 
+.smart-scheduler-guidance {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent) 45%, var(--theme-border));
+  background: color-mix(in srgb, var(--theme-accent) 10%, transparent);
+  color: var(--theme-text);
+}
+
 .smart-scheduler-list {
   display: grid;
   gap: 12px;
@@ -452,6 +461,18 @@
   padding: 16px;
   display: grid;
   gap: 10px;
+}
+
+.smart-scheduler-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  color: var(--theme-text);
+}
+
+.smart-scheduler-row strong {
+  font-size: 14px;
 }
 
 .smart-scheduler-item-header {
